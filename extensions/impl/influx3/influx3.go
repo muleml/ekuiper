@@ -1,0 +1,153 @@
+// Copyright 2021-2025 EMQ Technologies Co., Ltd.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package influx3
+
+import (
+	"crypto/tls"
+	"fmt"
+	"time"
+
+	"github.com/InfluxCommunity/influxdb3-go/v2/influxdb3"
+
+	"github.com/lf-edge/ekuiper/contract/v2/api"
+	"github.com/lf-edge/ekuiper/v2/extensions/impl/tspoint"
+	"github.com/lf-edge/ekuiper/v2/internal/pkg/util"
+	"github.com/lf-edge/ekuiper/v2/pkg/cast"
+	"github.com/lf-edge/ekuiper/v2/pkg/cert"
+	"github.com/lf-edge/ekuiper/v2/pkg/model"
+)
+
+type c struct {
+	Host         string        `json:"host"`
+	Token        string        `json:"token"`
+	Database     string        `json:"database"`
+	Measurement  string        `json:"measurement"`
+	PrecisionStr string        `json:"precision"`
+	Precision    time.Duration `json:"-"`
+
+	tspoint.WriteOptions
+}
+
+type influxSink3 struct {
+	conf      c
+	tlsconfig *tls.Config
+}
+
+func (m *influxSink3) Provision(ctx api.StreamContext, props map[string]any) error {
+	m.conf = c{
+		PrecisionStr: "ms",
+		WriteOptions: tspoint.WriteOptions{
+			PrecisionStr: "ms",
+		},
+	}
+
+	if err := cast.MapToStruct(props, &m.conf); err != nil {
+		return fmt.Errorf("error configuring influx3 sink: %s", err)
+	}
+
+	if len(m.conf.Host) == 0 {
+		return fmt.Errorf("host is required")
+	}
+
+	if len(m.conf.Token) == 0 {
+		return fmt.Errorf("token is required")
+	}
+
+	if len(m.conf.Database) == 0 {
+		return fmt.Errorf("database is required")
+	}
+
+	if len(m.conf.Measurement) == 0 {
+		return fmt.Errorf("measurement is required")
+	}
+
+	switch m.conf.PrecisionStr {
+	case "s":
+		m.conf.Precision = time.Second
+	case "ms":
+		m.conf.Precision = time.Millisecond
+	case "us":
+		m.conf.Precision = time.Microsecond
+	case "ns":
+		m.conf.Precision = time.Nanosecond
+	default:
+		return fmt.Errorf("precision %s is not supported", m.conf.PrecisionStr)
+	}
+
+	if err := cast.MapToStruct(props, &m.conf.WriteOptions); err != nil {
+		return fmt.Errorf("error configuring influx3 sink: %s", err)
+	}
+
+	if err := m.conf.WriteOptions.Validate(); err != nil {
+		return err
+	}
+
+	tlsConf, err := cert.GenTLSConfig(ctx, props)
+	if err != nil {
+		return fmt.Errorf("error configuring tls: %s", err)
+	}
+	m.tlsconfig = tlsConf
+
+	return nil
+}
+
+func (m *influxSink3) transformPoints(ctx api.StreamContext, data any) ([]*influxdb3.Point, error) {
+	rawPts, err := tspoint.SinkTransform(ctx, data, &m.conf.WriteOptions)
+	if err != nil {
+		ctx.GetLogger().Error(err)
+		return nil, err
+	}
+
+	pts := make([]*influxdb3.Point, 0, len(rawPts))
+	for _, rp := range rawPts {
+		pts = append(pts, influxdb3.NewPoint(m.conf.Measurement, rp.Tags, rp.Fields, rp.Tt))
+	}
+	return pts, nil
+}
+
+func (m *influxSink3) Connect(ctx api.StreamContext, sch api.StatusChangeHandler) error {
+	sch(api.ConnectionDisconnected, "influx3 sink connect is not implemented")
+	return fmt.Errorf("influx3 sink connect is not implemented")
+}
+
+func (m *influxSink3) Collect(ctx api.StreamContext, item api.MessageTuple) error {
+	return fmt.Errorf("influx3 sink collect is not implemented")
+}
+
+func (m *influxSink3) CollectList(ctx api.StreamContext, items api.MessageTupleList) error {
+	return fmt.Errorf("influx3 sink collectList is not implemented")
+}
+
+func (m *influxSink3) Close(ctx api.StreamContext) error {
+	return nil
+}
+
+func (m *influxSink3) Ping(ctx api.StreamContext, props map[string]any) error {
+	return m.Provision(ctx, props)
+}
+
+func (m *influxSink3) Info() model.SinkInfo {
+	return model.SinkInfo{HasFields: true}
+}
+
+func GetSink() api.Sink {
+	return &influxSink3{}
+}
+
+var (
+	_ api.TupleCollector = &influxSink3{}
+	_ util.PingableConn  = &influxSink3{}
+	_ model.SinkInfoNode = &influxSink3{}
+)

@@ -357,106 +357,89 @@ func TestCollectPoints(t *testing.T) {
 	}
 }
 
-//
-// func TestInfo(t *testing.T) {
-// 	s := &influxSink3{}
-// 	info := s.Info()
-// 	assert.True(t, info.HasFields)
-// }
-//
-// func TestCollectPointsError(t *testing.T) {
-// 	tests := []struct {
-// 		name string
-// 		conf c
-// 		data any
-// 		err  string
-// 	}{
-// 		{
-// 			name: "unsupported data",
-// 			conf: c{
-// 				Measurement: "test1",
-// 				WriteOptions: tspoint.WriteOptions{
-// 					Tags: map[string]string{
-// 						"tag1": "value1",
-// 						"tag2": "value2",
-// 					},
-// 				},
-// 			},
-// 			data: []byte{1, 2, 3},
-// 			err:  "sink needs map or []map, but receive unsupported data [1 2 3]",
-// 		},
-// 		{
-// 			name: "single without ts field",
-// 			conf: c{
-// 				Measurement: "test1",
-// 				WriteOptions: tspoint.WriteOptions{
-// 					Tags: map[string]string{
-// 						"tag1": "value1",
-// 						"tag2": "value2",
-// 					},
-// 					TsFieldName: "ts",
-// 				},
-// 			},
-// 			data: map[string]any{
-// 				"temperature": 20,
-// 				"humidity":    50,
-// 			},
-// 			err: "time field ts not found",
-// 		},
-// 		{
-// 			name: "normal batch with incorrect ts field",
-// 			conf: c{
-// 				Measurement: "test2",
-// 				WriteOptions: tspoint.WriteOptions{
-// 					Tags: map[string]string{
-// 						"tag1": "value1",
-// 						"tag2": "value2",
-// 					},
-// 					PrecisionStr: "s",
-// 					TsFieldName:  "ts",
-// 				},
-// 			},
-// 			data: []map[string]any{
-// 				{
-// 					"temperature": 20,
-// 					"humidity":    50,
-// 					"ts":          "add",
-// 				},
-// 				{
-// 					"temperature": 30,
-// 					"humidity":    60,
-// 					"ts":          "ddd",
-// 				},
-// 			},
-// 			err: "time field ts can not convert to timestamp(int64) : add",
-// 		},
-// 	}
-//
-// 	for _, test := range tests {
-// 		t.Run(test.name, func(t *testing.T) {
-// 			ifsink := &influxSink3{
-// 				conf: test.conf,
-// 			}
-// 			ctx := mockContext.NewMockContext(test.name, "op")
-// 			_, err := ifsink.transformPoints(ctx, test.data)
-// 			assert.Error(t, err)
-// 			assert.Equal(t, test.err, err.Error())
-// 		})
-// 	}
-// }
-//
-// func TestCollectLines(t *testing.T) {
-// 	// This test confirms line protocol generation by the influxdb3 Point itself.
-// 	// We don't build line protocol in the sink; we only use MarshalBinary here for verification.
-// 	timex.Set(10)
-// 	ifsink := &influxSink3{conf: c{Measurement: "lp"}}
-// 	ctx := mockContext.NewMockContext("lp", "op")
-// 	points, err := ifsink.transformPoints(ctx, map[string]any{"name": "home"})
-// 	assert.NoError(t, err)
-// 	assert.Len(t, points, 1)
-//
-// 	lp, err := points[0].MarshalBinary(lineprotocol.Millisecond)
-// 	assert.NoError(t, err)
-// 	// String fields should be quoted in line protocol.
-// 	assert.Equal(t, "lp name=\"home\" 10", string(lp))
-// }
+func TestInfo(t *testing.T) {
+	s := &influxSink3{}
+	info := s.Info()
+	assert.True(t, info.HasFields)
+}
+
+func TestCollectPointsError(t *testing.T) {
+	tests := []struct {
+		name string
+		conf c
+		data any
+		err  string
+	}{
+		{
+			name: "unsupported data",
+			conf: c{
+				Measurement: "test1",
+				WriteOptions: tspoint.WriteOptions{
+					Tags: map[string]string{
+						"tag1": "value1",
+						"tag2": "value2",
+					},
+				},
+			},
+			data: []byte{1, 2, 3},
+			err:  "sink needs map or []map, but receive unsupported data [1 2 3]",
+		},
+		{
+			name: "single without ts field",
+			conf: c{
+				Measurement: "test1",
+				WriteOptions: tspoint.WriteOptions{
+					Tags: map[string]string{
+						"tag1": "value1",
+						"tag2": "value2",
+					},
+					TsFieldName: "ts",
+				},
+			},
+			data: map[string]any{
+				"temperature": 20,
+				"humidity":    50,
+			},
+			err: "time field ts not found",
+		},
+		{
+			name: "normal batch with incorrect ts field",
+			conf: c{
+				Measurement: "test2",
+				WriteOptions: tspoint.WriteOptions{
+					Tags: map[string]string{
+						"tag1": "value1",
+						"tag2": "value2",
+					},
+					PrecisionStr: "s",
+					TsFieldName:  "ts",
+				},
+			},
+			data: []map[string]any{
+				{
+					"temperature": 20,
+					"humidity":    50,
+					"ts":          "add",
+				},
+				{
+					"temperature": 30,
+					"humidity":    60,
+					"ts":          "ddd",
+				},
+			},
+			err: "time field ts can not convert to timestamp(int64) : add",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ifsink := &influxSink3{
+				conf: test.conf,
+			}
+			ctx := mockContext.NewMockContext(test.name, "op")
+			_, err := ifsink.transformPoints(ctx, test.data)
+			assert.Error(t, err)
+			assert.Equal(t, test.err, err.Error())
+		})
+	}
+}

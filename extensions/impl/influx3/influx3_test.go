@@ -15,13 +15,16 @@
 package influx3
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/InfluxCommunity/influxdb3-go/v2/influxdb3"
 	"github.com/influxdata/line-protocol/v2/lineprotocol"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
+	"github.com/lf-edge/ekuiper/contract/v2/api"
 	"github.com/lf-edge/ekuiper/v2/extensions/impl/tspoint"
 	mockContext "github.com/lf-edge/ekuiper/v2/pkg/mock/context"
 	"github.com/lf-edge/ekuiper/v2/pkg/timex"
@@ -30,21 +33,21 @@ import (
 func TestConfig(t *testing.T) {
 	tests := []struct {
 		name     string
-		conf     map[string]interface{}
+		conf     map[string]any
 		expected c
 		error    string
 	}{
 		{
 			name: "happy path",
-			conf: map[string]interface{}{
+			conf: map[string]any{
 				"host":        "https://example:8086",
 				"token":       "Token_test",
 				"database":    "db1",
 				"measurement": "test",
-				"tags": map[string]interface{}{
+				"tags": map[string]any{
 					"tag": "value",
 				},
-				"fields":      []interface{}{"temperature"},
+				"fields":      []any{"temperature"},
 				"tsFieldName": "ts",
 			},
 			expected: c{
@@ -66,26 +69,26 @@ func TestConfig(t *testing.T) {
 		},
 		{
 			name: "unmarshall error",
-			conf: map[string]interface{}{
+			conf: map[string]any{
 				"database": 12,
 			},
 			error: "error configuring influx3 sink: 1 error(s) decoding:\n\n* 'database' expected type 'string', got unconvertible type 'int', value: '12'",
 		},
 		{
 			name:  "host missing error",
-			conf:  map[string]interface{}{},
+			conf:  map[string]any{},
 			error: "host is required",
 		},
 		{
 			name: "token missing error",
-			conf: map[string]interface{}{
+			conf: map[string]any{
 				"host": "https://example:8086",
 			},
 			error: "token is required",
 		},
 		{
 			name: "database missing error",
-			conf: map[string]interface{}{
+			conf: map[string]any{
 				"host":  "https://example:8086",
 				"token": "t",
 			},
@@ -93,7 +96,7 @@ func TestConfig(t *testing.T) {
 		},
 		{
 			name: "measurement missing error",
-			conf: map[string]interface{}{
+			conf: map[string]any{
 				"host":     "https://example:8086",
 				"token":    "t",
 				"database": "db1",
@@ -102,7 +105,7 @@ func TestConfig(t *testing.T) {
 		},
 		{
 			name: "precision invalid error",
-			conf: map[string]interface{}{
+			conf: map[string]any{
 				"host":        "https://example:8086",
 				"token":       "t",
 				"database":    "db1",
@@ -110,17 +113,6 @@ func TestConfig(t *testing.T) {
 				"precision":   "abc",
 			},
 			error: "precision abc is not supported",
-		},
-		{
-			name: "unmarshall error for tls",
-			conf: map[string]interface{}{
-				"host":        "https://example:8086",
-				"token":       "t",
-				"database":    "db1",
-				"measurement": "mm",
-				"rootCaPath":  12,
-			},
-			error: "error configuring tls: 1 error(s) decoding:\n\n* 'rootCaPath' expected type 'string', got unconvertible type 'int', value: '12'",
 		},
 	}
 	ctx := mockContext.NewMockContext("testconfig", "op")
@@ -442,4 +434,155 @@ func TestCollectPointsError(t *testing.T) {
 			assert.Equal(t, test.err, err.Error())
 		})
 	}
+}
+
+type fakeInflux3Client struct {
+	getVerCalls int
+	getVerRet   string
+	getVerErr   error
+
+	createCalls int
+	closeCalls  int
+	closeErr    error
+}
+
+func (f *fakeInflux3Client) GetServerVersion() (string, error) {
+	f.getVerCalls++
+	return f.getVerRet, f.getVerErr
+}
+
+func (f *fakeInflux3Client) Close() error {
+	f.closeCalls++
+	return f.closeErr
+}
+
+type statusCall struct {
+	status  string
+	message string
+}
+
+type statusRecorder struct {
+	calls []statusCall
+}
+
+func (r *statusRecorder) handler(status, message string) {
+	r.calls = append(r.calls, statusCall{status: status, message: message})
+}
+
+func TestConnect_HappyPath(t *testing.T) {
+	fc := &fakeInflux3Client{getVerRet: "3.0.0", getVerCalls: 0}
+
+	newFakeClient := func() (influx3Client, error) {
+		return fc, nil
+	}
+	ctx := mockContext.NewMockContext("connect_ok", "op")
+	rec := &statusRecorder{}
+
+	s := &influxSink3{
+		conf: c{
+			Host:        "https://example:8086",
+			Token:       "t",
+			Database:    "db",
+			Measurement: "m",
+		},
+		newClient: newFakeClient,
+	}
+
+	err := s.Connect(ctx, rec.handler)
+	require.NoError(t, err)
+
+	require.Equal(t, 1, fc.getVerCalls)
+	require.Same(t, fc, s.client)
+
+	require.Len(t, rec.calls, 2)
+	require.Equal(t, api.ConnectionConnecting, rec.calls[0].status)
+	require.Equal(t, api.ConnectionConnected, rec.calls[1].status)
+}
+
+func TestConnect_Idempotent_NoRecreate(t *testing.T) {
+	ctx := mockContext.NewMockContext("connect_idem", "op")
+	rec := &statusRecorder{}
+
+	fc := &fakeInflux3Client{getVerRet: "3.0.0", getVerCalls: 0}
+	newFakeClient := func() (influx3Client, error) {
+		fc.createCalls++
+		return fc, nil
+	}
+	s := &influxSink3{
+		conf: c{
+			Host:        "https://example:8086",
+			Token:       "t",
+			Database:    "db",
+			Measurement: "m",
+		},
+		newClient: newFakeClient,
+	}
+
+	err := s.Connect(ctx, rec.handler)
+	require.NoError(t, err)
+	err = s.Connect(ctx, rec.handler)
+	require.NoError(t, err)
+
+	require.Equal(t, 1, fc.createCalls)
+	require.Equal(t, 2, fc.getVerCalls)
+	require.Same(t, fc, s.client)
+}
+
+func TestConnect_ConnectionError(t *testing.T) {
+	fc := &fakeInflux3Client{getVerRet: "3.0.0", getVerCalls: 0}
+
+	newFakeClient := func() (influx3Client, error) {
+		return fc, fmt.Errorf("Error creating client")
+	}
+	ctx := mockContext.NewMockContext("connect_ok", "op")
+	rec := &statusRecorder{}
+
+	s := &influxSink3{
+		conf: c{
+			Host:        "https://example:8086",
+			Token:       "t",
+			Database:    "db",
+			Measurement: "m",
+		},
+		newClient: newFakeClient,
+	}
+
+	err := s.Connect(ctx, rec.handler)
+	require.Error(t, err)
+
+	require.Equal(t, 0, fc.getVerCalls)
+
+	require.Len(t, rec.calls, 2)
+	require.Equal(t, api.ConnectionConnecting, rec.calls[0].status)
+	require.Equal(t, api.ConnectionDisconnected, rec.calls[1].status)
+
+	require.Nil(t, s.client)
+}
+
+func TestConnect_PingsError_DisconnectReturnsError(t *testing.T) {
+	ctx := mockContext.NewMockContext("connect_error", "op")
+	rec := &statusRecorder{}
+
+	fc := &fakeInflux3Client{getVerRet: "3.0.0", getVerCalls: 0, getVerErr: fmt.Errorf("Connection error")}
+	newFakeClient := func() (influx3Client, error) {
+		return fc, nil
+	}
+	s := &influxSink3{
+		conf: c{
+			Host:        "https://example:8086",
+			Token:       "t",
+			Database:    "db",
+			Measurement: "m",
+		},
+		newClient: newFakeClient,
+	}
+
+	err := s.Connect(ctx, rec.handler)
+	require.Error(t, err)
+	require.Equal(t, 1, fc.getVerCalls)
+
+	require.Len(t, rec.calls, 2)
+	require.Equal(t, api.ConnectionConnecting, rec.calls[0].status)
+	require.Equal(t, api.ConnectionDisconnected, rec.calls[1].status)
+	require.Equal(t, rec.calls[1].message, "Connection error")
 }

@@ -25,17 +25,22 @@ import (
 	"github.com/lf-edge/ekuiper/v2/extensions/impl/tspoint"
 	"github.com/lf-edge/ekuiper/v2/internal/pkg/util"
 	"github.com/lf-edge/ekuiper/v2/pkg/cast"
-	"github.com/lf-edge/ekuiper/v2/pkg/cert"
 	"github.com/lf-edge/ekuiper/v2/pkg/model"
 )
 
+type influx3Client interface {
+	GetServerVersion() (string, error)
+	Close() error
+}
+
 type c struct {
-	Host         string        `json:"host"`
-	Token        string        `json:"token"`
-	Database     string        `json:"database"`
-	Measurement  string        `json:"measurement"`
-	PrecisionStr string        `json:"precision"`
-	Precision    time.Duration `json:"-"`
+	Host             string        `json:"host"`
+	Token            string        `json:"token"`
+	Database         string        `json:"database"`
+	Measurement      string        `json:"measurement"`
+	PrecisionStr     string        `json:"precision"`
+	Precision        time.Duration `json:"-"`
+	SSLRootsFilePath string        `json:"ssl_cert_path"`
 
 	tspoint.WriteOptions
 }
@@ -43,6 +48,9 @@ type c struct {
 type influxSink3 struct {
 	conf      c
 	tlsconfig *tls.Config
+	client    influx3Client
+
+	newClient func() (influx3Client, error)
 }
 
 func (m *influxSink3) Provision(ctx api.StreamContext, props map[string]any) error {
@@ -94,11 +102,9 @@ func (m *influxSink3) Provision(ctx api.StreamContext, props map[string]any) err
 		return err
 	}
 
-	tlsConf, err := cert.GenTLSConfig(ctx, props)
-	if err != nil {
-		return fmt.Errorf("error configuring tls: %s", err)
+	if m.newClient == nil {
+		m.newClient = m.defaultNewClient
 	}
-	m.tlsconfig = tlsConf
 
 	return nil
 }
@@ -117,9 +123,33 @@ func (m *influxSink3) transformPoints(ctx api.StreamContext, data any) ([]*influ
 	return pts, nil
 }
 
+func (m *influxSink3) defaultNewClient() (influx3Client, error) {
+	config := influxdb3.ClientConfig{
+		Host:             m.conf.Host,
+		Token:            m.conf.Token,
+		Database:         m.conf.Database,
+		SSLRootsFilePath: m.conf.SSLRootsFilePath,
+	}
+	return influxdb3.New(config)
+}
+
 func (m *influxSink3) Connect(ctx api.StreamContext, sch api.StatusChangeHandler) error {
-	sch(api.ConnectionDisconnected, "influx3 sink connect is not implemented")
-	return fmt.Errorf("influx3 sink connect is not implemented")
+	sch(api.ConnectionConnecting, "")
+	if m.client == nil {
+		client, err := m.newClient()
+		if err != nil {
+			sch(api.ConnectionDisconnected, err.Error())
+			return fmt.Errorf("Error creating influx3 client %s", err)
+		}
+		m.client = client
+	}
+	_, err := m.client.GetServerVersion()
+	if err != nil {
+		sch(api.ConnectionDisconnected, err.Error())
+		return fmt.Errorf("Connection error: %s", err)
+	}
+	sch(api.ConnectionConnected, "")
+	return nil
 }
 
 func (m *influxSink3) Collect(ctx api.StreamContext, item api.MessageTuple) error {

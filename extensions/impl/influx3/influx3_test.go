@@ -601,7 +601,55 @@ func TestConnect_PingsError_DisconnectReturnsError(t *testing.T) {
 	require.Equal(t, rec.calls[1].message, "Connection error")
 }
 
-func TestCollect_CallsWritePointsOnceWithTransformedPoints(t *testing.T) {
+func TestInternalCollect_HappyPath(t *testing.T) {
+	timex.Set(10)
+	ctx := mockContext.NewMockContext("collect_ok", "op")
+
+	fc := &fakeInflux3Client{}
+	s := newCollectSink(fc)
+
+	data := map[string]any{"t": 20}
+	wantsPt := []*influxdb3.Point{
+		influxdb3.NewPoint("m",
+			map[string]string{"tag": "v"},
+			map[string]any{"t": 20},
+			time.UnixMilli(10),
+		),
+	}
+
+	err := s.collect(ctx, data)
+	require.NoError(t, err)
+
+	require.Equal(t, 1, fc.writeCalls)
+	require.Len(t, fc.lastPoints, 1)
+	require.Equal(t, wantsPt[0].Values, fc.lastPoints[0].Values)
+}
+
+func TestInternalCollect_ReturnsErrorIfNotPresent(t *testing.T) {
+	ctx := mockContext.NewMockContext("collect_not_present", "op")
+
+	s := newCollectSink(nil)
+
+	data := map[string]any{"temperature": 20}
+	err := s.collect(ctx, data)
+	require.ErrorContains(t, err, "client not selected")
+}
+
+func TestInternalCollect_PropagatesWritePointsErrorAsIOError(t *testing.T) {
+	timex.Set(10)
+	ctx := mockContext.NewMockContext("collect_write_err", "op")
+
+	fc := &fakeInflux3Client{writeErr: errors.New("boom")}
+	s := newCollectSink(fc)
+
+	data := map[string]any{"temperature": 20}
+	err := s.collect(ctx, data)
+	require.Error(t, err)
+	require.True(t, errorx.IsIOError(err))
+	require.Contains(t, err.Error(), "boom")
+}
+
+func TestCollect(t *testing.T) {
 	timex.Set(10)
 	ctx := mockContext.NewMockContext("collect_ok", "op")
 
@@ -623,26 +671,4 @@ func TestCollect_CallsWritePointsOnceWithTransformedPoints(t *testing.T) {
 	require.Equal(t, 1, fc.writeCalls)
 	require.Len(t, fc.lastPoints, 1)
 	require.Equal(t, wantsPt[0].Values, fc.lastPoints[0].Values)
-}
-
-func TestCollect_ReturnsErrorIfNotPresent(t *testing.T) {
-	ctx := mockContext.NewMockContext("collect_not_present", "op")
-
-	s := newCollectSink(nil)
-
-	err := s.Collect(ctx, testTuple{m: map[string]any{"temperature": 20}})
-	require.ErrorContains(t, err, "client not selected")
-}
-
-func TestCollect_PropagatesWritePointsErrorAsIOError(t *testing.T) {
-	timex.Set(10)
-	ctx := mockContext.NewMockContext("collect_write_err", "op")
-
-	fc := &fakeInflux3Client{writeErr: errors.New("boom")}
-	s := newCollectSink(fc)
-
-	err := s.Collect(ctx, testTuple{m: map[string]any{"temperature": 20}})
-	require.Error(t, err)
-	require.True(t, errorx.IsIOError(err))
-	require.Contains(t, err.Error(), "boom")
 }

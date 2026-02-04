@@ -485,7 +485,10 @@ func (f *fakeInflux3Client) GetServerVersion() (string, error) {
 
 func (f *fakeInflux3Client) Close() error {
 	f.closeCalls++
-	return f.closeErr
+	if f.closeCalls > 1 {
+		return f.closeErr
+	}
+	return nil
 }
 
 type statusCall struct {
@@ -716,4 +719,37 @@ func TestCollectList(t *testing.T) {
 	require.Len(t, fc.lastPoints, 2)
 	require.Equal(t, wantsPt[0].Values, fc.lastPoints[0].Values)
 	require.Equal(t, wantsPt[1].Values, fc.lastPoints[1].Values)
+}
+
+func TestClose_ErrorWithNoClient(t *testing.T) {
+	ctx := mockContext.NewMockContext("close_no_client", "op")
+
+	s := &influxSink3{client: nil}
+
+	err := s.Close(ctx)
+	require.ErrorContains(t, err, "error closing client")
+}
+
+func TestClose_WithClient_CallsClientOnce(t *testing.T) {
+	ctx := mockContext.NewMockContext("close_with_client", "op")
+
+	fc := &fakeInflux3Client{}
+	s := &influxSink3{client: fc}
+
+	err := s.Close(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, fc.closeCalls)
+}
+
+func TestClose_ErrorIfClosedTwice(t *testing.T) {
+	ctx := mockContext.NewMockContext("close_with_client", "op")
+
+	fc := &fakeInflux3Client{closeErr: fmt.Errorf("error closing client")}
+	s := &influxSink3{client: fc}
+
+	err := s.Close(ctx)
+	require.NoError(t, err)
+	err = s.Close(ctx)
+	require.Error(t, err)
+	require.Equal(t, 2, fc.closeCalls)
 }

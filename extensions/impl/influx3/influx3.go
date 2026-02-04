@@ -16,7 +16,6 @@ package influx3
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"time"
 
@@ -49,9 +48,8 @@ type c struct {
 }
 
 type influxSink3 struct {
-	conf      c
-	tlsconfig *tls.Config
-	client    influx3Client
+	conf   c
+	client influx3Client
 
 	newClient func() (influx3Client, error)
 }
@@ -109,6 +107,8 @@ func (m *influxSink3) Provision(ctx api.StreamContext, props map[string]any) err
 		m.newClient = m.defaultNewClient
 	}
 
+	ctx.GetLogger().Infof("influx3 sink provision succesfully terminated")
+
 	return nil
 }
 
@@ -149,17 +149,17 @@ func (m *influxSink3) Connect(ctx api.StreamContext, sch api.StatusChangeHandler
 	_, err := m.client.GetServerVersion()
 	if err != nil {
 		sch(api.ConnectionDisconnected, err.Error())
-		return fmt.Errorf("Connection error: %s", err)
+		return fmt.Errorf("Influx3 sink connection error: %s", err)
 	}
 	sch(api.ConnectionConnected, "")
+	ctx.GetLogger().Infof("influx3 succesfully connected")
 	return nil
 }
 
 func (m *influxSink3) collect(ctx api.StreamContext, data any) error {
 	if m.client == nil {
-		return fmt.Errorf("client not selected")
+		return fmt.Errorf("influx3 sink: client not selected")
 	}
-	logger := ctx.GetLogger()
 	pts, err := m.transformPoints(ctx, data)
 	if err != nil {
 		return err
@@ -168,7 +168,7 @@ func (m *influxSink3) collect(ctx api.StreamContext, data any) error {
 	if err != nil {
 		return errorx.NewIOErr(fmt.Sprintf("influx3 sink failed to write data: %s", err))
 	}
-	logger.Debug("insert data into influxdb3 success")
+	ctx.GetLogger().Debug("successfully inserted data into influxdb3")
 	return nil
 }
 
@@ -181,6 +181,14 @@ func (m *influxSink3) CollectList(ctx api.StreamContext, items api.MessageTupleL
 }
 
 func (m *influxSink3) Close(ctx api.StreamContext) error {
+	if m.client == nil {
+		return fmt.Errorf("error closing client influx3: no client selected")
+	}
+	err := m.client.Close()
+	if err != nil {
+		return err
+	}
+	ctx.GetLogger().Infof("influx3 sink successfully closed")
 	return nil
 }
 

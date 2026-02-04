@@ -15,6 +15,7 @@
 package influx3
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"time"
@@ -25,12 +26,14 @@ import (
 	"github.com/lf-edge/ekuiper/v2/extensions/impl/tspoint"
 	"github.com/lf-edge/ekuiper/v2/internal/pkg/util"
 	"github.com/lf-edge/ekuiper/v2/pkg/cast"
+	"github.com/lf-edge/ekuiper/v2/pkg/errorx"
 	"github.com/lf-edge/ekuiper/v2/pkg/model"
 )
 
 type influx3Client interface {
 	GetServerVersion() (string, error)
 	Close() error
+	WritePoints(ctx context.Context, points []*influxdb3.Point, options ...influxdb3.WriteOption) error
 }
 
 type c struct {
@@ -152,8 +155,25 @@ func (m *influxSink3) Connect(ctx api.StreamContext, sch api.StatusChangeHandler
 	return nil
 }
 
+func (m *influxSink3) collect(ctx api.StreamContext, data any) error {
+	if m.client == nil {
+		return fmt.Errorf("client not selected")
+	}
+	logger := ctx.GetLogger()
+	pts, err := m.transformPoints(ctx, data)
+	if err != nil {
+		return err
+	}
+	err = m.client.WritePoints(ctx, pts)
+	if err != nil {
+		return errorx.NewIOErr(fmt.Sprintf("influx3 sink failed to write data: %s", err))
+	}
+	logger.Debug("insert data into influxdb3 success")
+	return nil
+}
+
 func (m *influxSink3) Collect(ctx api.StreamContext, item api.MessageTuple) error {
-	return fmt.Errorf("influx3 sink collect is not implemented")
+	return m.collect(ctx, item.ToMap())
 }
 
 func (m *influxSink3) CollectList(ctx api.StreamContext, items api.MessageTupleList) error {

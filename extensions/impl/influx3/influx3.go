@@ -177,7 +177,7 @@ func (m *influxSink3) Collect(ctx api.StreamContext, item api.MessageTuple) erro
 }
 
 func (m *influxSink3) CollectList(ctx api.StreamContext, items api.MessageTupleList) error {
-	return fmt.Errorf("influx3 sink collectList is not implemented")
+	return m.collect(ctx, items.ToMaps())
 }
 
 func (m *influxSink3) Close(ctx api.StreamContext) error {

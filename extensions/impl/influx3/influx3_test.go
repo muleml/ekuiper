@@ -444,6 +444,18 @@ type testTuple struct{ m map[string]any }
 func (t testTuple) Value(key, table string) (any, bool) { v, ok := t.m[key]; return v, ok }
 func (t testTuple) ToMap() map[string]any               { return t.m }
 
+type testTupleList struct{ ms []map[string]any }
+
+func (l testTupleList) Len() int                 { return len(l.ms) }
+func (l testTupleList) ToMaps() []map[string]any { return l.ms }
+func (l testTupleList) RangeOfTuples(f func(index int, tuple api.MessageTuple) bool) {
+	for i, m := range l.ms {
+		if !f(i, testTuple{m: m}) {
+			return
+		}
+	}
+}
+
 type fakeInflux3Client struct {
 	getVerCalls int
 	getVerRet   string
@@ -671,4 +683,37 @@ func TestCollect(t *testing.T) {
 	require.Equal(t, 1, fc.writeCalls)
 	require.Len(t, fc.lastPoints, 1)
 	require.Equal(t, wantsPt[0].Values, fc.lastPoints[0].Values)
+}
+
+func TestCollectList(t *testing.T) {
+	timex.Set(10)
+	ctx := mockContext.NewMockContext("collect_ok", "op")
+
+	fc := &fakeInflux3Client{}
+	s := newCollectSink(fc)
+
+	items := testTupleList{ms: []map[string]any{
+		{"t": 20},
+		{"t": 40},
+	}}
+	wantsPt := []*influxdb3.Point{
+		influxdb3.NewPoint("m",
+			map[string]string{"tag": "v"},
+			map[string]any{"t": 20},
+			time.UnixMilli(10),
+		),
+		influxdb3.NewPoint("m",
+			map[string]string{"tag": "v"},
+			map[string]any{"t": 40},
+			time.UnixMilli(10),
+		),
+	}
+
+	err := s.CollectList(ctx, items)
+	require.NoError(t, err)
+
+	require.Equal(t, 1, fc.writeCalls)
+	require.Len(t, fc.lastPoints, 2)
+	require.Equal(t, wantsPt[0].Values, fc.lastPoints[0].Values)
+	require.Equal(t, wantsPt[1].Values, fc.lastPoints[1].Values)
 }

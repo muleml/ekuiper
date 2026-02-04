@@ -33,56 +33,6 @@ import (
 	"github.com/lf-edge/ekuiper/v2/pkg/timex"
 )
 
-type testTuple struct{ m map[string]any }
-
-func (t testTuple) Value(key, table string) (any, bool) { v, ok := t.m[key]; return v, ok }
-func (t testTuple) ToMap() map[string]any               { return t.m }
-
-type fakeInflux3Client struct {
-	getVerCalls int
-	getVerRet   string
-	getVerErr   error
-
-	createCalls int
-	closeCalls  int
-	closeErr    error
-
-	writeCalls int
-	gotCtx     context.Context
-	lastPoints []*influxdb3.Point
-	writeErr   error
-}
-
-func (f *fakeInflux3Client) WritePoints(ctx context.Context, pts []*influxdb3.Point, options ...influxdb3.WriteOption) error {
-	f.writeCalls++
-	f.gotCtx = ctx
-	f.lastPoints = append([]*influxdb3.Point(nil), pts...)
-	return f.writeErr
-}
-
-func (f *fakeInflux3Client) GetServerVersion() (string, error) {
-	f.getVerCalls++
-	return f.getVerRet, f.getVerErr
-}
-
-func (f *fakeInflux3Client) Close() error {
-	f.closeCalls++
-	return f.closeErr
-}
-
-type statusCall struct {
-	status  string
-	message string
-}
-
-type statusRecorder struct {
-	calls []statusCall
-}
-
-func (r *statusRecorder) handler(status, message string) {
-	r.calls = append(r.calls, statusCall{status: status, message: message})
-}
-
 func TestConfig(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -185,7 +135,7 @@ func TestConfig(t *testing.T) {
 	}
 }
 
-func TestCollectPoints(t *testing.T) {
+func TestTransformPoints(t *testing.T) {
 	timex.Set(10)
 	tests := []struct {
 		name string
@@ -408,7 +358,7 @@ func TestInfo(t *testing.T) {
 	assert.True(t, info.HasFields)
 }
 
-func TestCollectPointsError(t *testing.T) {
+func TestTransformPointsError(t *testing.T) {
 	tests := []struct {
 		name string
 		conf c
@@ -489,6 +439,82 @@ func TestCollectPointsError(t *testing.T) {
 	}
 }
 
+type testTuple struct{ m map[string]any }
+
+func (t testTuple) Value(key, table string) (any, bool) { v, ok := t.m[key]; return v, ok }
+func (t testTuple) ToMap() map[string]any               { return t.m }
+
+type fakeInflux3Client struct {
+	getVerCalls int
+	getVerRet   string
+	getVerErr   error
+
+	createCalls int
+	closeCalls  int
+	closeErr    error
+
+	writeCalls int
+	gotCtx     context.Context
+	lastPoints []*influxdb3.Point
+	writeErr   error
+}
+
+func (f *fakeInflux3Client) WritePoints(ctx context.Context, pts []*influxdb3.Point, options ...influxdb3.WriteOption) error {
+	f.writeCalls++
+	f.gotCtx = ctx
+	f.lastPoints = append([]*influxdb3.Point(nil), pts...)
+	return f.writeErr
+}
+
+func (f *fakeInflux3Client) GetServerVersion() (string, error) {
+	f.getVerCalls++
+	return f.getVerRet, f.getVerErr
+}
+
+func (f *fakeInflux3Client) Close() error {
+	f.closeCalls++
+	return f.closeErr
+}
+
+type statusCall struct {
+	status  string
+	message string
+}
+
+type statusRecorder struct {
+	calls []statusCall
+}
+
+func (r *statusRecorder) handler(status, message string) {
+	r.calls = append(r.calls, statusCall{status: status, message: message})
+}
+
+func baseConf() c {
+	return c{
+		Host:        "https://example:8086",
+		Token:       "t",
+		Database:    "db",
+		Measurement: "m",
+		WriteOptions: tspoint.WriteOptions{
+			Tags: map[string]string{"tag": "v"},
+		},
+	}
+}
+
+func newConnectSink(cli func() (influx3Client, error)) *influxSink3 {
+	return &influxSink3{
+		conf:      baseConf(),
+		newClient: cli,
+	}
+}
+
+func newCollectSink(client influx3Client) *influxSink3 {
+	return &influxSink3{
+		conf:   baseConf(),
+		client: client,
+	}
+}
+
 func TestConnect_HappyPath(t *testing.T) {
 	fc := &fakeInflux3Client{getVerRet: "3.0.0", getVerCalls: 0}
 
@@ -498,15 +524,7 @@ func TestConnect_HappyPath(t *testing.T) {
 	ctx := mockContext.NewMockContext("connect_ok", "op")
 	rec := &statusRecorder{}
 
-	s := &influxSink3{
-		conf: c{
-			Host:        "https://example:8086",
-			Token:       "t",
-			Database:    "db",
-			Measurement: "m",
-		},
-		newClient: newFakeClient,
-	}
+	s := newConnectSink(newFakeClient)
 
 	err := s.Connect(ctx, rec.handler)
 	require.NoError(t, err)
@@ -528,15 +546,7 @@ func TestConnect_Idempotent_NoRecreate(t *testing.T) {
 		fc.createCalls++
 		return fc, nil
 	}
-	s := &influxSink3{
-		conf: c{
-			Host:        "https://example:8086",
-			Token:       "t",
-			Database:    "db",
-			Measurement: "m",
-		},
-		newClient: newFakeClient,
-	}
+	s := newConnectSink(newFakeClient)
 
 	err := s.Connect(ctx, rec.handler)
 	require.NoError(t, err)
@@ -557,15 +567,7 @@ func TestConnect_ConnectionError(t *testing.T) {
 	ctx := mockContext.NewMockContext("connect_ok", "op")
 	rec := &statusRecorder{}
 
-	s := &influxSink3{
-		conf: c{
-			Host:        "https://example:8086",
-			Token:       "t",
-			Database:    "db",
-			Measurement: "m",
-		},
-		newClient: newFakeClient,
-	}
+	s := newConnectSink(newFakeClient)
 
 	err := s.Connect(ctx, rec.handler)
 	require.Error(t, err)
@@ -587,15 +589,7 @@ func TestConnect_PingsError_DisconnectReturnsError(t *testing.T) {
 	newFakeClient := func() (influx3Client, error) {
 		return fc, nil
 	}
-	s := &influxSink3{
-		conf: c{
-			Host:        "https://example:8086",
-			Token:       "t",
-			Database:    "db",
-			Measurement: "m",
-		},
-		newClient: newFakeClient,
-	}
+	s := newConnectSink(newFakeClient)
 
 	err := s.Connect(ctx, rec.handler)
 	require.Error(t, err)
@@ -611,16 +605,8 @@ func TestCollect_CallsWritePointsOnceWithTransformedPoints(t *testing.T) {
 	timex.Set(10)
 	ctx := mockContext.NewMockContext("collect_ok", "op")
 
-	s := &influxSink3{
-		conf: c{
-			Measurement: "m",
-			WriteOptions: tspoint.WriteOptions{
-				Tags: map[string]string{"tag": "v"},
-			},
-		},
-	}
 	fc := &fakeInflux3Client{}
-	s.client = fc
+	s := newCollectSink(fc)
 
 	item := testTuple{m: map[string]any{"t": 20}}
 	wantsPt := []*influxdb3.Point{
@@ -642,15 +628,7 @@ func TestCollect_CallsWritePointsOnceWithTransformedPoints(t *testing.T) {
 func TestCollect_ReturnsErrorIfNotPresent(t *testing.T) {
 	ctx := mockContext.NewMockContext("collect_not_present", "op")
 
-	s := &influxSink3{
-		conf: c{
-			Measurement: "m",
-			WriteOptions: tspoint.WriteOptions{
-				Tags: map[string]string{"tag": "v"},
-			},
-		},
-		client: nil,
-	}
+	s := newCollectSink(nil)
 
 	err := s.Collect(ctx, testTuple{m: map[string]any{"temperature": 20}})
 	require.ErrorContains(t, err, "client not selected")
@@ -660,16 +638,8 @@ func TestCollect_PropagatesWritePointsErrorAsIOError(t *testing.T) {
 	timex.Set(10)
 	ctx := mockContext.NewMockContext("collect_write_err", "op")
 
-	s := &influxSink3{
-		conf: c{
-			Measurement: "m",
-			WriteOptions: tspoint.WriteOptions{
-				Tags: map[string]string{"tag": "v"},
-			},
-		},
-	}
 	fc := &fakeInflux3Client{writeErr: errors.New("boom")}
-	s.client = fc
+	s := newCollectSink(fc)
 
 	err := s.Collect(ctx, testTuple{m: map[string]any{"temperature": 20}})
 	require.Error(t, err)

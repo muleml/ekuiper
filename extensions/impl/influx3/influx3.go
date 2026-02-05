@@ -17,6 +17,7 @@ package influx3
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/InfluxCommunity/influxdb3-go/v2/influxdb3"
@@ -110,6 +111,32 @@ func (m *influxSink3) Provision(ctx api.StreamContext, props map[string]any) err
 	ctx.GetLogger().Infof("influx3 sink provision succesfully terminated")
 
 	return nil
+}
+
+func (m *influxSink3) Consume(props map[string]any) {
+	// Only swallow tags when they contain templates, otherwise keep them
+	raw, ok := props["tags"]
+	if !ok {
+		return
+	}
+
+	tags, ok := raw.(map[string]any)
+	if !ok {
+		// if not map -> normal decoding error handling
+		return
+	}
+
+	for _, v := range tags {
+		s, ok := v.(string)
+		if !ok {
+			continue
+		}
+		// check if there are data template ({{ .value }}) -> dynamic properties
+		if strings.Contains(s, "{{") && strings.Contains(s, "}}") {
+			delete(props, "tags")
+			return
+		}
+	}
 }
 
 func (m *influxSink3) transformPoints(ctx api.StreamContext, data any) ([]*influxdb3.Point, error) {

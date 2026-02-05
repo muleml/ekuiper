@@ -30,6 +30,7 @@ import (
 	"github.com/lf-edge/ekuiper/v2/extensions/impl/tspoint"
 	"github.com/lf-edge/ekuiper/v2/pkg/errorx"
 	mockContext "github.com/lf-edge/ekuiper/v2/pkg/mock/context"
+	"github.com/lf-edge/ekuiper/v2/pkg/model"
 	"github.com/lf-edge/ekuiper/v2/pkg/timex"
 )
 
@@ -752,4 +753,32 @@ func TestClose_ErrorIfClosedTwice(t *testing.T) {
 	err = s.Close(ctx)
 	require.Error(t, err)
 	require.Equal(t, 2, fc.closeCalls)
+}
+
+func TestConsume_RemovesDynamicTagsFromPropsButKeepsInSink(t *testing.T) {
+	ctx := mockContext.NewMockContext("consume_dynamic_tags", "op")
+
+	props := map[string]any{
+		"host":        "https://example:8086",
+		"token":       "Token_test",
+		"database":    "db1",
+		"measurement": "test",
+		"tags": map[string]any{
+			"tag": "{{.value}}",
+		},
+		"fields":      []any{"temperature"},
+		"tsFieldName": "ts",
+	}
+
+	s := &influxSink3{}
+	require.NoError(t, s.Provision(ctx, props))
+
+	_, ok := any(s).(model.PropsConsumer)
+	require.True(t, ok, "influxSink3 must implement model.PropsConsumer")
+	s.Consume(props)
+
+	_, ok = props["tags"]
+	require.False(t, ok, "Consume must remove tags from props if they contain templates")
+
+	require.Equal(t, "{{.value}}", s.conf.WriteOptions.Tags["tag"], "sink must keep tag template for per row evaluation")
 }

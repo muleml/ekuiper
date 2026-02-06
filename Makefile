@@ -114,6 +114,7 @@ build_core: build_prepare
 PLUGINS_IN_FULL := \
 	extensions/sinks/influx \
 	extensions/sinks/influx2 \
+	extensions/sinks/influx3 \
 	extensions/sinks/kafka \
 	extensions/sinks/image \
 	extensions/sinks/sql   \

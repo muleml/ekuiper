@@ -136,6 +136,80 @@ func TestConfig(t *testing.T) {
 	}
 }
 
+func TestProvision_PrecisionVariants(t *testing.T) {
+	ctx := mockContext.NewMockContext("testprecision", "op")
+
+	tests := []struct {
+		name      string
+		precision string
+		want      time.Duration
+	}{
+		{name: "seconds", precision: "s", want: time.Second},
+		{name: "microseconds", precision: "us", want: time.Microsecond},
+		{name: "nanoseconds", precision: "ns", want: time.Nanosecond},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &influxSink3{}
+
+			props := map[string]any{
+				"host":        "https://example:8086",
+				"token":       "t",
+				"database":    "db1",
+				"measurement": "m",
+				"precision":   tt.precision,
+			}
+
+			err := s.Provision(ctx, props)
+			require.NoError(t, err)
+			require.Equal(t, tt.precision, s.conf.PrecisionStr)
+			require.Equal(t, tt.precision, s.conf.WriteOptions.PrecisionStr)
+			require.Equal(t, tt.want, s.conf.Precision)
+		})
+	}
+}
+
+func TestConsume_EarlyReturnsAndKeepsTagsWhenNotTemplate(t *testing.T) {
+	s := &influxSink3{}
+
+	t.Run("no tags", func(t *testing.T) {
+		props := map[string]any{"a": 1}
+		s.Consume(props)
+		require.Equal(t, map[string]any{"a": 1}, props)
+	})
+
+	t.Run("tags is not a map", func(t *testing.T) {
+		props := map[string]any{"tags": "nope"}
+		s.Consume(props)
+		_, ok := props["tags"]
+		require.True(t, ok)
+	})
+
+	t.Run("tags map has non-string values", func(t *testing.T) {
+		props := map[string]any{
+			"tags": map[string]any{
+				"tag1": 123,
+			},
+		}
+		s.Consume(props)
+		_, ok := props["tags"]
+		require.True(t, ok)
+	})
+
+	t.Run("tags map has string values without templates", func(t *testing.T) {
+		props := map[string]any{
+			"tags": map[string]any{
+				"tag1": "value1",
+				"tag2": "value2",
+			},
+		}
+		s.Consume(props)
+		_, ok := props["tags"]
+		require.True(t, ok)
+	})
+}
+
 func TestTransformPoints(t *testing.T) {
 	timex.Set(10)
 	tests := []struct {
@@ -665,6 +739,18 @@ func TestInternalCollect_PropagatesWritePointsErrorAsIOError(t *testing.T) {
 	require.Contains(t, err.Error(), "boom")
 }
 
+func TestInternalCollect_TransformPointsError_DoesNotWrite(t *testing.T) {
+	ctx := mockContext.NewMockContext("collect_transform_err", "op")
+
+	fc := &fakeInflux3Client{}
+	s := newCollectSink(fc)
+
+	err := s.collect(ctx, []byte{1, 2, 3})
+	require.Error(t, err)
+	require.Equal(t, "sink needs map or []map, but receive unsupported data [1 2 3]", err.Error())
+	require.Equal(t, 0, fc.writeCalls)
+}
+
 func TestCollect(t *testing.T) {
 	timex.Set(10)
 	ctx := mockContext.NewMockContext("collect_ok", "op")
@@ -781,4 +867,35 @@ func TestConsume_RemovesDynamicTagsFromPropsButKeepsInSink(t *testing.T) {
 	require.False(t, ok, "Consume must remove tags from props if they contain templates")
 
 	require.Equal(t, "{{.value}}", s.conf.WriteOptions.Tags["tag"], "sink must keep tag template for per row evaluation")
+}
+
+func TestPing_DelegatesToProvision(t *testing.T) {
+	ctx := mockContext.NewMockContext("ping", "op")
+	s := &influxSink3{}
+
+	err := s.Ping(ctx, map[string]any{})
+	require.Error(t, err)
+	require.Equal(t, "host is required", err.Error())
+}
+
+func TestGetSink_ReturnsInfluxSink3(t *testing.T) {
+	s := GetSink()
+	require.NotNil(t, s)
+	_, ok := s.(*influxSink3)
+	require.True(t, ok)
+}
+
+func TestDefaultNewClient_CreatesClient(t *testing.T) {
+	s := &influxSink3{
+		conf: c{
+			Host:             "https://example:8086",
+			Token:            "t",
+			Database:         "db",
+			SSLRootsFilePath: "",
+		},
+	}
+
+	cli, err := s.defaultNewClient()
+	require.NoError(t, err)
+	require.NotNil(t, cli)
 }

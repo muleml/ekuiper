@@ -114,6 +114,7 @@ build_core: build_prepare
 PLUGINS_IN_FULL := \
 	extensions/sinks/influx \
 	extensions/sinks/influx2 \
+	extensions/sinks/influx3 \
 	extensions/sinks/kafka \
 	extensions/sinks/image \
 	extensions/sinks/sql   \
@@ -174,6 +175,7 @@ docker:
 
 PLUGINS := sinks/influx \
 	sinks/influx2 \
+	sinks/influx3 \
 	sinks/zmq \
 	sinks/kafka \
 	sinks/image \

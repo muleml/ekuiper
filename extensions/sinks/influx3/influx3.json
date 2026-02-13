@@ -8,11 +8,11 @@
       "website": "https://github.com/piepor"
     },
     "helpUrl": {
-      "en_US": "https://ekuiper.org/docs/en/latest/guide/sinks/plugin/influx2.html",
-      "zh_CN": "https://ekuiper.org/docs/zh/latest/guide/sinks/plugin/influx2.html"
+      "en_US": "https://ekuiper.org/docs/en/latest/guide/sinks/plugin/influx3.html",
+      "zh_CN": "https://ekuiper.org/docs/zh/latest/guide/sinks/plugin/influx3.html"
     },
     "description": {
-      "en_US": "This a sink plugin for InfluxDB3, it can be used for saving the analysis data into InfluxDB V2.X .",
+      "en_US": "This a sink plugin for InfluxDB3, it can be used for saving the analysis data into InfluxDB V3.X .",
       "zh_CN": "本插件为 InfluxDB3 的持久化插件，可以用于将分析数据存入 InfluxDB V3.X 中"
     }
   },
@@ -21,18 +21,18 @@
   ],
   "properties": [
     {
-      "name": "addr",
+      "name": "host",
       "default": "http://127.0.0.1:8086",
       "optional": false,
       "control": "text",
       "type": "string",
       "hint": {
-        "en_US": "The addr of the InfluxDB",
+        "en_US": "The address of the InfluxDB",
         "zh_CN": "InfluxDB 的地址"
       },
       "label": {
-        "en_US": "Addr",
-        "zh_CN": "地址"
+        "en_US": "Host",
+        "zh_CN": "主机"
       }
     },
     {
@@ -53,7 +53,7 @@
     {
       "name": "token",
       "default": "",
-      "optional": true,
+      "optional": false,
       "control": "text",
       "type": "string",
       "hint": {
@@ -66,19 +66,19 @@
       }
     },
     {
-      "name": "rootCaPath",
+      "name": "ssl_cert_path",
       "default": "",
       "optional": true,
       "connection_related": true,
       "control": "text",
       "type": "string",
       "hint": {
-        "en_US": "The location of root ca path. It can be an absolute path, or a relative path. ",
-        "zh_CN": "根证书路径，用以验证服务器证书。可以为绝对路径，也可以为相对路径。"
+        "en_US": "The location of ssl certifcate. It can be an absolute path, or a relative path.",
+        "zh_CN": "SSL 证书的位置。它可以是绝对路径，也可以是相对路径。"
       },
       "label": {
-        "en_US": "Root CA path",
-        "zh_CN": "根证书路径"
+        "en_US": "SSL Certificate Path",
+        "zh_CN": "SSL 证书路径"
       }
     },
     {

@@ -220,7 +220,26 @@ func (m *influxSink3) Close(ctx api.StreamContext) error {
 }
 
 func (m *influxSink3) Ping(ctx api.StreamContext, props map[string]any) error {
-	return m.Provision(ctx, props)
+	err := m.Provision(ctx, props)
+	if err != nil {
+		return fmt.Errorf("Influx3 ping provision error: %s", err)
+	}
+	if m.client == nil {
+		client, err := m.newClient()
+		if err != nil {
+			return fmt.Errorf("Influx3 ping new client error: %s", err)
+		}
+		_, err = client.GetServerVersion()
+		if err != nil {
+			return fmt.Errorf("Influx3 ping connection error: %s", err)
+		}
+	} else {
+		_, err = m.client.GetServerVersion()
+		if err != nil {
+			return fmt.Errorf("Influx3 ping connection error: %s", err)
+		}
+	}
+	return nil
 }
 
 func (m *influxSink3) Info() model.SinkInfo {

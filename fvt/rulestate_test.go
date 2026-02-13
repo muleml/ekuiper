@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/suite"
+
+	"github.com/lf-edge/ekuiper/v2/pkg/syncx"
 )
 
 type RuleStateTestSuite struct {
@@ -503,8 +505,8 @@ func (s *RuleStateTestSuite) TestMulShared() {
 	s.Run("async run", func() {
 		wg := sync.WaitGroup{}
 		wg.Add(6)
-		final := 0
-		var mu sync.Mutex
+		history := make([]int, 0, 6)
+		var mu syncx.Mutex
 		go func() {
 			defer wg.Done()
 			fmt.Println("start 1")
@@ -512,7 +514,7 @@ func (s *RuleStateTestSuite) TestMulShared() {
 			s.Require().NoError(err)
 			s.Require().Equal(http.StatusOK, resp.StatusCode)
 			mu.Lock()
-			final = 0
+			history = append(history, 0)
 			mu.Unlock()
 		}()
 		go func() {
@@ -522,7 +524,7 @@ func (s *RuleStateTestSuite) TestMulShared() {
 			s.Require().NoError(err)
 			s.Require().Equal(http.StatusOK, resp.StatusCode)
 			mu.Lock()
-			final = 1
+			history = append(history, 1)
 			mu.Unlock()
 		}()
 		go func() {
@@ -533,7 +535,7 @@ func (s *RuleStateTestSuite) TestMulShared() {
 			s.T().Log(GetResponseText(resp))
 			s.Require().Equal(http.StatusOK, resp.StatusCode)
 			mu.Lock()
-			final = 2
+			history = append(history, 2)
 			mu.Unlock()
 		}()
 		go func() {
@@ -544,7 +546,7 @@ func (s *RuleStateTestSuite) TestMulShared() {
 			s.T().Log(GetResponseText(resp))
 			s.Require().Equal(http.StatusOK, resp.StatusCode)
 			mu.Lock()
-			final = 3
+			history = append(history, 3)
 			mu.Unlock()
 		}()
 		go func() {
@@ -554,7 +556,7 @@ func (s *RuleStateTestSuite) TestMulShared() {
 			s.Require().NoError(err)
 			s.Require().Equal(http.StatusOK, resp.StatusCode)
 			mu.Lock()
-			final = 4
+			history = append(history, 4)
 			mu.Unlock()
 		}()
 		go func() {
@@ -564,7 +566,7 @@ func (s *RuleStateTestSuite) TestMulShared() {
 			s.Require().NoError(err)
 			s.Require().Equal(http.StatusOK, resp.StatusCode)
 			mu.Lock()
-			final = 5
+			history = append(history, 5)
 			mu.Unlock()
 		}()
 		wg.Wait()
@@ -579,14 +581,34 @@ func (s *RuleStateTestSuite) TestMulShared() {
 		s.True(ok)
 		s.True(sinkOut1.(float64) > 0)
 		// mul1 status depends on the final command
-		metrics, err = client.GetRuleStatus("mul1")
-		s.Require().NoError(err)
-		fmt.Println("final", final)
-		if final == 1 || final == 4 {
-			s.Equal("stopped", metrics["status"])
-		} else {
-			s.Equal("running", metrics["status"])
+
+		expectedStatus := "running" // Initial state is running from previous tests
+		possibleStates := map[string]bool{expectedStatus: true}
+
+		s.T().Logf("History: %v", history)
+		for _, op := range history {
+			switch op {
+			case 0, 5: // Start
+				possibleStates = map[string]bool{"running": true}
+			case 1, 4: // Stop
+				possibleStates = map[string]bool{"stopped": true}
+			case 2: // Update mul1
+				// If Update sees "Running", it restarts -> Running.
+				// If Update sees "Stopped", it preserves -> Stopped.
+				// Since we don't know if it overlapped with a previous properties, it adds "running" to possibilities.
+				possibleStates["running"] = true
+			case 3: // Update mul2
+				// No effect on mul1 status ideally
+			}
 		}
+
+		s.Eventually(func() bool {
+			metrics, err = client.GetRuleStatus("mul1")
+			if err != nil {
+				return false
+			}
+			return possibleStates[metrics["status"].(string)]
+		}, 1*time.Second, 100*time.Millisecond, "expected one of %v, got %s. history: %v", possibleStates, metrics["status"], history)
 	})
 	// Clean
 	s.Run("clean up", func() {

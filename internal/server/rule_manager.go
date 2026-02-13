@@ -21,7 +21,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/lf-edge/ekuiper/v2/internal/conf"
@@ -36,6 +35,7 @@ import (
 	"github.com/lf-edge/ekuiper/v2/pkg/errorx"
 	"github.com/lf-edge/ekuiper/v2/pkg/infra"
 	"github.com/lf-edge/ekuiper/v2/pkg/replace"
+	"github.com/lf-edge/ekuiper/v2/pkg/syncx"
 )
 
 // Rule storage includes kv and in memory registry
@@ -45,7 +45,7 @@ import (
 var registry *RuleRegistry
 
 type RuleRegistry struct {
-	sync.RWMutex
+	syncx.RWMutex
 	internal map[string]*rule.State
 }
 
@@ -204,8 +204,9 @@ func (rr *RuleRegistry) UpsertRule(ruleId, ruleJson string) error {
 		})
 	} else {
 		// Version check is now atomic with the rest of the operation
-		if !processor.CanReplace(rs.Rule.Version, r.Version) {
-			return fmt.Errorf("rule %s already exists with version (%s), new version (%s) is lower", ruleId, rs.Rule.Version, r.Version)
+		rule := rs.GetRule()
+		if !processor.CanReplace(rule.Version, r.Version) {
+			return fmt.Errorf("rule %s already exists with version (%s), new version (%s) is lower", ruleId, rule.Version, r.Version)
 		}
 	}
 	err = rs.ValidateAndRun(r)
@@ -272,10 +273,11 @@ func (rr *RuleRegistry) RestartRule(name string) error {
 			conf.Log.Warnf("restart rule update db status error: %s", err.Error())
 		}
 		rs.Stop()
-		rs.Rule, err = ruleProcessor.GetRuleById(name)
+		r, err := ruleProcessor.GetRuleById(name)
 		if err != nil {
 			return err
 		}
+		rs.SetRule(r)
 		return rs.Start()
 	} else {
 		return errorx.NewWithCode(errorx.NOT_FOUND, fmt.Sprintf("Rule %s is not found in registry, please check if it is created", name))
@@ -546,7 +548,7 @@ func getAllRulesWithState() ([]ruleWrapper, error) {
 		rs, ok := registry.load(id)
 		if ok {
 			s := rs.GetState()
-			rules = append(rules, ruleWrapper{rule: rs.Rule, state: s, startTime: rs.GetStartTimestamp()})
+			rules = append(rules, ruleWrapper{rule: rs.GetRule(), state: s, startTime: rs.GetStartTimestamp()})
 		}
 	}
 	return rules, nil

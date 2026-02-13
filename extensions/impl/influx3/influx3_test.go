@@ -869,13 +869,95 @@ func TestConsume_RemovesDynamicTagsFromPropsButKeepsInSink(t *testing.T) {
 	require.Equal(t, "{{.value}}", s.conf.WriteOptions.Tags["tag"], "sink must keep tag template for per row evaluation")
 }
 
-func TestPing_DelegatesToProvision(t *testing.T) {
+func TestPing(t *testing.T) {
 	ctx := mockContext.NewMockContext("ping", "op")
-	s := &influxSink3{}
 
-	err := s.Ping(ctx, map[string]any{})
-	require.Error(t, err)
-	require.Equal(t, "host is required", err.Error())
+	t.Run("happy path with client", func(t *testing.T) {
+		fc := &fakeInflux3Client{getVerRet: "3.0.0"}
+		s := &influxSink3{client: fc}
+		props := map[string]any{
+			"host":        "https://example:8086",
+			"token":       "t",
+			"database":    "db",
+			"measurement": "m",
+		}
+		err := s.Ping(ctx, props)
+		require.NoError(t, err)
+		require.Equal(t, 1, fc.getVerCalls)
+	})
+
+	t.Run("happy path without client", func(t *testing.T) {
+		fc := &fakeInflux3Client{getVerRet: "3.0.0"}
+		newFakeClient := func() (influx3Client, error) {
+			return fc, nil
+		}
+		s := &influxSink3{newClient: newFakeClient}
+		props := map[string]any{
+			"host":        "https://example:8086",
+			"token":       "t",
+			"database":    "db",
+			"measurement": "m",
+		}
+		err := s.Ping(ctx, props)
+		require.NoError(t, err)
+		require.Equal(t, 1, fc.getVerCalls)
+	})
+
+	t.Run("error when provision fails", func(t *testing.T) {
+		s := &influxSink3{}
+		props := map[string]any{}
+		err := s.Ping(ctx, props)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "Influx3 ping provision error")
+	})
+
+	t.Run("error creating client", func(t *testing.T) {
+		newFakeClient := func() (influx3Client, error) {
+			return nil, fmt.Errorf("Error creating client")
+		}
+		s := &influxSink3{newClient: newFakeClient}
+		props := map[string]any{
+			"host":        "https://example:8086",
+			"token":       "t",
+			"database":    "db",
+			"measurement": "m",
+		}
+		err := s.Ping(ctx, props)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "Influx3 ping new client error")
+	})
+
+	t.Run("connection error with client", func(t *testing.T) {
+		fc := &fakeInflux3Client{getVerErr: fmt.Errorf("connection error")}
+		s := &influxSink3{client: fc}
+		props := map[string]any{
+			"host":        "https://example:8086",
+			"token":       "t",
+			"database":    "db",
+			"measurement": "m",
+		}
+		err := s.Ping(ctx, props)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "Influx3 ping connection error")
+		require.Equal(t, 1, fc.getVerCalls)
+	})
+	t.Run("connection error without client", func(t *testing.T) {
+		fc := &fakeInflux3Client{getVerErr: fmt.Errorf("connection error")}
+		newFakeClient := func() (influx3Client, error) {
+			return fc, nil
+		}
+		s := &influxSink3{newClient: newFakeClient}
+		props := map[string]any{
+			"host":        "https://example:8086",
+			"token":       "t",
+			"database":    "db",
+			"measurement": "m",
+		}
+		err := s.Ping(ctx, props)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "Influx3 ping connection error")
+		require.Equal(t, 1, fc.getVerCalls)
+	})
 }
 
 func TestGetSink_ReturnsInfluxSink3(t *testing.T) {

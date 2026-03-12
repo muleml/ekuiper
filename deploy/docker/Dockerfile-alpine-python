@@ -13,7 +13,8 @@
 # limitations under the License.
 
 ARG GO_VERSION=1.25.4
-FROM ghcr.io/lf-edge/ekuiper/base:$GO_VERSION-alpine AS builder
+ARG BASE_IMAGE=ghcr.io/muleml/ekuiper-base
+FROM ${BASE_IMAGE}:${GO_VERSION}-alpine AS builder
 
 COPY . /go/kuiper
 

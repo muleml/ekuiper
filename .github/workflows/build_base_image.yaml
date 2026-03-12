@@ -1,22 +1,31 @@
-name: Update docker base image
+name: Build muleml base image
 
 permissions:
-  contents: write
+  contents: read
   packages: write
 
-## Update the base image every day
+## Update the base image every month and every change in the dockerfiles
 on:
-  workflow_dispatch:
   schedule:
-  ## In UTC
-  - cron: '0 0 * * *'
+    - cron: "0 3 1 * *"
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - .github/dockerfile/**
+      - .github/workflows/build_base_image.yaml
+  pull_request:
+    branches: [ main ]
+    paths:
+      - .github/dockerfile/**
+      - .github/workflows/build_base_image.yaml
 
 ## Build base images to be used by other github workflows
 jobs:
 
   build:
     runs-on: ubuntu-24.04
-    if: github.repository == 'lf-edge/ekuiper'
+    if: github.repository == 'muleml/ekuiper'
 
     strategy:
       fail-fast: false
@@ -42,28 +51,17 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ github.token }}
+          password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@v6
-        if: matrix.os == 'debian'
         with:
-          push: true
+          # do not push image on PR events, if the PR is accepted then the workflow can push the new image
+          push: ${{ github.event_name != 'pull_request' }}
           pull: true
           cache-from: type=local,src=/tmp/.docker-buildx-cache,mode=max
           cache-to: type=local,dest=/tmp/.docker-buildx-cache-new,mode=max
           platforms: linux/amd64,linux/arm64,linux/arm/v7
           build-args: GO_VERSION=${{ matrix.golang }}
-          tags: ghcr.io/${{ github.repository }}/base:${{ matrix.golang }}-${{ matrix.os }}
-          file: .github/dockerfile/Dockerfile.${{ matrix.os }}
-      - uses: docker/build-push-action@v6
-        if: matrix.os == 'alpine'
-        with:
-          push: true
-          pull: true
-          cache-from: type=local,src=/tmp/.docker-buildx-cache,mode=max
-          cache-to: type=local,dest=/tmp/.docker-buildx-cache-new,mode=max
-          platforms: linux/amd64,linux/arm64,linux/arm/v7
-          build-args: GO_VERSION=${{ matrix.golang }}
-          tags: ghcr.io/${{ github.repository }}/base:${{ matrix.golang }}-${{ matrix.os }}
+          tags: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}-base:${{ matrix.golang }}-${{ matrix.os }}
           file: .github/dockerfile/Dockerfile.${{ matrix.os }}
       - name: Update cache
         run: |

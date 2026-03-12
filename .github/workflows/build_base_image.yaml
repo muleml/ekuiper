@@ -9,16 +9,6 @@ on:
   schedule:
     - cron: "0 3 1 * *"
   workflow_dispatch:
-  push:
-    branches: [ main ]
-    paths:
-      - .github/dockerfile/**
-      - .github/workflows/build_base_image.yaml
-  pull_request:
-    branches: [ main ]
-    paths:
-      - .github/dockerfile/**
-      - .github/workflows/build_base_image.yaml
 
 ## Build base images to be used by other github workflows
 jobs:
@@ -54,8 +44,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@v6
         with:
-          # do not push image on PR events, if the PR is accepted then the workflow can push the new image
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           pull: true
           cache-from: type=local,src=/tmp/.docker-buildx-cache,mode=max
           cache-to: type=local,dest=/tmp/.docker-buildx-cache-new,mode=max

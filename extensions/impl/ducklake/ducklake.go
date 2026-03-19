@@ -150,7 +150,7 @@ func (m *DuckLakeSink) Connect(ctx api.StreamContext, sch api.StatusChangeHandle
 	}
 
 	sch(api.ConnectionConnected, "")
-	ctx.GetLogger().Infof("ducklake sink succesfully connected")
+	ctx.GetLogger().Infof("ducklake sink successfully connected")
 	return nil
 }
 
@@ -162,6 +162,56 @@ func (m *DuckLakeSink) Close(ctx api.StreamContext) error {
 	if err != nil {
 		return fmt.Errorf("error closing ducklake sink: %s", err)
 	}
+	return nil
+}
+
+func (m *DuckLakeSink) Ping(ctx api.StreamContext, props map[string]any) error {
+	query := "INSTALL ducklake;"
+	_, err := m.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("Ducklake sink ping connection error: %s", err)
+	}
+
+	if m.conf.Catalog.Type == "postgres" {
+		query := "INSTALL postgres;"
+		_, err = m.db.ExecContext(ctx, query)
+		if err != nil {
+			return fmt.Errorf("Ducklake sink ping connection error: %s", err)
+		}
+	}
+
+	query, _ = queryCreateStorageSecret(m.conf.Storage)
+	_, err = m.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("Ducklake sink ping connection error: %s", err)
+	}
+
+	query, _ = queryCreateCatalogSecret(m.conf.Catalog)
+	if query != "" {
+		_, err = m.db.ExecContext(ctx, query)
+		if err != nil {
+			return fmt.Errorf("Ducklake sink ping connection error: %s", err)
+		}
+	}
+
+	query, _ = queryAttachDucklake(m.conf.Storage, m.conf.Catalog.Type)
+	_, err = m.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("Ducklake sink ping connection error: %s", err)
+	}
+
+	query = "USE memory;"
+	_, err = m.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("Ducklake sink ping connection error: %s", err)
+	}
+	query = "DETACH the_ducklake;"
+	_, err = m.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("Ducklake sink ping connection error: %s", err)
+	}
+
+	ctx.GetLogger().Infof("ducklake sink successful ping")
 	return nil
 }
 

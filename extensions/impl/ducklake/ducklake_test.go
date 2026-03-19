@@ -673,3 +673,352 @@ func TestClose(t *testing.T) {
 		require.Equal(t, 1, db.closeCalls)
 	})
 }
+
+// func TestPing(t *testing.T) {
+// 	ctx := mockContext.NewMockContext("ping", "op")
+//
+// 	t.Run("happy path", func(t *testing.T) {
+// 		fsv := &fakeStorageVerifier{}
+// 		fcv := &fakeCatalogVerifier{}
+// 		s := &DuckLakeSink{
+// 			storageVerifier: fsv,
+// 			catalogVerifier: fcv,
+// 		}
+// 		conf := map[string]any{
+// 			"catalog": map[string]any{
+// 				"catalog_type":     "postgres",
+// 				"catalog_host":     "postgres",
+// 				"catalog_port":     5432,
+// 				"catalog_database": "ducklake_catalog",
+// 				"catalog_user":     "user",
+// 				"catalog_password": "password",
+// 			},
+// 			"storage": map[string]any{
+// 				"storage_type":     "s3",
+// 				"storage_endpoint": "test-endpoint:9000",
+// 				"storage_bucket":   "ducklake",
+// 				"storage_key_id":   "test_id",
+// 				"storage_secret":   "test_secret",
+// 			},
+// 			"table": "table",
+// 		}
+// 		err := s.Ping(ctx, conf)
+// 		require.NoError(t, err)
+// 		require.Equal(t, 1, fsv.calls)
+// 		require.Equal(t, 1, fcv.calls)
+// 	})
+//
+// 	t.Run("error when provision fails", func(t *testing.T) {
+// 		s := &DuckLakeSink{}
+// 		props := map[string]any{}
+// 		err := s.Ping(ctx, props)
+// 		require.Error(t, err)
+// 		require.ErrorContains(t, err, "Ducklake sink ping provision error")
+// 	})
+//
+// 	t.Run("storage connection error", func(t *testing.T) {
+// 		fsv := &fakeStorageVerifier{strErr: "storage connection error"}
+// 		fcv := &fakeCatalogVerifier{}
+// 		s := &DuckLakeSink{
+// 			storageVerifier: fsv,
+// 			catalogVerifier: fcv,
+// 		}
+// 		conf := map[string]any{
+// 			"catalog": map[string]any{
+// 				"catalog_type":     "postgres",
+// 				"catalog_host":     "postgres",
+// 				"catalog_port":     5432,
+// 				"catalog_database": "ducklake_catalog",
+// 				"catalog_user":     "user",
+// 				"catalog_password": "password",
+// 			},
+// 			"storage": map[string]any{
+// 				"storage_type":     "s3",
+// 				"storage_endpoint": "test-endpoint:9000",
+// 				"storage_bucket":   "ducklake",
+// 				"storage_key_id":   "test_id",
+// 				"storage_secret":   "test_secret",
+// 			},
+// 			"table": "table",
+// 		}
+// 		err := s.Ping(ctx, conf)
+// 		require.Error(t, err)
+// 		require.ErrorContains(t, err, "Ducklake sink ping connection error")
+// 		require.ErrorContains(t, err, "storage connection error")
+// 		require.Equal(t, 1, fsv.calls)
+// 	})
+// 	t.Run("catalog connection error", func(t *testing.T) {
+// 		fsv := &fakeStorageVerifier{}
+// 		fcv := &fakeCatalogVerifier{strErr: "catalog connection error"}
+// 		s := &DuckLakeSink{
+// 			storageVerifier: fsv,
+// 			catalogVerifier: fcv,
+// 		}
+// 		conf := map[string]any{
+// 			"catalog": map[string]any{
+// 				"catalog_type":     "postgres",
+// 				"catalog_host":     "postgres",
+// 				"catalog_port":     5432,
+// 				"catalog_database": "ducklake_catalog",
+// 				"catalog_user":     "user",
+// 				"catalog_password": "password",
+// 			},
+// 			"storage": map[string]any{
+// 				"storage_type":     "s3",
+// 				"storage_endpoint": "test-endpoint:9000",
+// 				"storage_bucket":   "ducklake",
+// 				"storage_key_id":   "test_id",
+// 				"storage_secret":   "test_secret",
+// 			},
+// 			"table": "table",
+// 		}
+// 		err := s.Ping(ctx, conf)
+// 		require.Error(t, err)
+// 		require.ErrorContains(t, err, "Ducklake sink ping connection error")
+// 		require.ErrorContains(t, err, "catalog connection error")
+// 		require.Equal(t, 1, fcv.calls)
+// 	})
+// }
+
+func TestPing(t *testing.T) {
+	ctx := mockContext.NewMockContext("testconnect", "op")
+
+	tests := []struct {
+		name              string
+		conf              map[string]any
+		expected          []string
+		errStr            string
+		numCorrectQueries int
+	}{
+		{
+			name: "happy path",
+			conf: map[string]any{
+				"storage": map[string]any{
+					"storage_type":     "s3",
+					"storage_endpoint": "test-endpoint:9000",
+					"storage_bucket":   "ducklake",
+					"storage_key_id":   "test_id",
+					"storage_secret":   "test_secret",
+				},
+				"table": "table",
+			},
+			expected: []string{
+				"INSTALL ducklake;",
+				"CREATE OR REPLACE s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000')",
+				"ATTACH 'ducklake:' AS the_ducklake (DATA_PATH 's3://ducklake');",
+				"USE memory;",
+				"DETACH the_ducklake;",
+			},
+		},
+		{
+			name: "duckb catalog",
+			conf: map[string]any{
+				"storage": map[string]any{
+					"storage_type":     "s3",
+					"storage_endpoint": "test-endpoint:9000",
+					"storage_bucket":   "ducklake",
+					"storage_key_id":   "test_id",
+					"storage_secret":   "test_secret",
+				},
+				"catalog": map[string]any{
+					"catalog_type": "duckdb",
+				},
+				"table": "table",
+			},
+			expected: []string{
+				"INSTALL ducklake;",
+				"CREATE OR REPLACE s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000')",
+				"ATTACH 'ducklake:' AS the_ducklake (DATA_PATH 's3://ducklake');",
+				"USE memory;",
+				"DETACH the_ducklake;",
+			},
+		},
+		{
+			name: "postgres catalog",
+			conf: map[string]any{
+				"catalog": map[string]any{
+					"catalog_type":     "postgres",
+					"catalog_host":     "postgres",
+					"catalog_port":     5432,
+					"catalog_database": "ducklake_catalog",
+					"catalog_user":     "user",
+					"catalog_password": "password",
+				},
+				"storage": map[string]any{
+					"storage_type":     "s3",
+					"storage_endpoint": "test-endpoint:9000",
+					"storage_bucket":   "ducklake",
+					"storage_key_id":   "test_id",
+					"storage_secret":   "test_secret",
+				},
+				"table": "table",
+			},
+			expected: []string{
+				"INSTALL ducklake;",
+				"INSTALL postgres;",
+				"CREATE OR REPLACE s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000')",
+				"CREATE OR REPLACE postgres_secret (TYPE postgres, HOST 'postgres', PORT 5432, DATABASE ducklake_catalog, USER 'user', PASSWORD 'password')",
+				"ATTACH 'ducklake:postgres_secret' AS the_ducklake (DATA_PATH 's3://ducklake');",
+				"USE memory;",
+				"DETACH the_ducklake;",
+			},
+		},
+		{
+			name: "error install ducklake",
+			conf: map[string]any{
+				"catalog": map[string]any{
+					"catalog_type":     "postgres",
+					"catalog_host":     "postgres",
+					"catalog_port":     5432,
+					"catalog_database": "ducklake_catalog",
+					"catalog_user":     "user",
+					"catalog_password": "password",
+				},
+				"storage": map[string]any{
+					"storage_type":     "s3",
+					"storage_endpoint": "test-endpoint:9000",
+					"storage_bucket":   "ducklake",
+					"storage_key_id":   "test_id",
+					"storage_secret":   "test_secret",
+				},
+				"table": "table",
+			},
+			expected: []string{
+				"INSTALL ducklake;",
+			},
+			errStr:            "Ducklake sink ping connection error",
+			numCorrectQueries: 1,
+		},
+		{
+			name: "error install postgres",
+			conf: map[string]any{
+				"catalog": map[string]any{
+					"catalog_type":     "postgres",
+					"catalog_host":     "postgres",
+					"catalog_port":     5432,
+					"catalog_database": "ducklake_catalog",
+					"catalog_user":     "user",
+					"catalog_password": "password",
+				},
+				"storage": map[string]any{
+					"storage_type":     "s3",
+					"storage_endpoint": "test-endpoint:9000",
+					"storage_bucket":   "ducklake",
+					"storage_key_id":   "test_id",
+					"storage_secret":   "test_secret",
+				},
+				"table": "table",
+			},
+			expected: []string{
+				"INSTALL ducklake;",
+				"INSTALL postgres;",
+			},
+			errStr:            "Ducklake sink ping connection error",
+			numCorrectQueries: 2,
+		},
+		{
+			name: "error storage secret",
+			conf: map[string]any{
+				"catalog": map[string]any{
+					"catalog_type":     "postgres",
+					"catalog_host":     "postgres",
+					"catalog_port":     5432,
+					"catalog_database": "ducklake_catalog",
+					"catalog_user":     "user",
+					"catalog_password": "password",
+				},
+				"storage": map[string]any{
+					"storage_type":     "s3",
+					"storage_endpoint": "test-endpoint:9000",
+					"storage_bucket":   "ducklake",
+					"storage_key_id":   "test_id",
+					"storage_secret":   "test_secret",
+				},
+				"table": "table",
+			},
+			expected: []string{
+				"INSTALL ducklake;",
+				"INSTALL postgres;",
+				"CREATE OR REPLACE s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000')",
+			},
+			errStr:            "Ducklake sink ping connection error",
+			numCorrectQueries: 3,
+		},
+		{
+			name: "error catalog secret",
+			conf: map[string]any{
+				"catalog": map[string]any{
+					"catalog_type":     "postgres",
+					"catalog_host":     "postgres",
+					"catalog_port":     5432,
+					"catalog_database": "ducklake_catalog",
+					"catalog_user":     "user",
+					"catalog_password": "password",
+				},
+				"storage": map[string]any{
+					"storage_type":     "s3",
+					"storage_endpoint": "test-endpoint:9000",
+					"storage_bucket":   "ducklake",
+					"storage_key_id":   "test_id",
+					"storage_secret":   "test_secret",
+				},
+				"table": "table",
+			},
+			expected: []string{
+				"INSTALL ducklake;",
+				"INSTALL postgres;",
+				"CREATE OR REPLACE s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000')",
+				"CREATE OR REPLACE postgres_secret (TYPE postgres, HOST 'postgres', PORT 5432, DATABASE ducklake_catalog, USER 'user', PASSWORD 'password')",
+			},
+			errStr:            "Ducklake sink ping connection error",
+			numCorrectQueries: 4,
+		},
+		{
+			name: "error attach ducklake",
+			conf: map[string]any{
+				"catalog": map[string]any{
+					"catalog_type":     "postgres",
+					"catalog_host":     "postgres",
+					"catalog_port":     5432,
+					"catalog_database": "ducklake_catalog",
+					"catalog_user":     "user",
+					"catalog_password": "password",
+				},
+				"storage": map[string]any{
+					"storage_type":     "s3",
+					"storage_endpoint": "test-endpoint:9000",
+					"storage_bucket":   "ducklake",
+					"storage_key_id":   "test_id",
+					"storage_secret":   "test_secret",
+				},
+				"table": "table",
+			},
+			expected: []string{
+				"INSTALL ducklake;",
+				"INSTALL postgres;",
+				"CREATE OR REPLACE s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000')",
+				"CREATE OR REPLACE postgres_secret (TYPE postgres, HOST 'postgres', PORT 5432, DATABASE ducklake_catalog, USER 'user', PASSWORD 'password')",
+				"ATTACH 'ducklake:postgres_secret' AS the_ducklake (DATA_PATH 's3://ducklake');",
+			},
+			errStr:            "Ducklake sink ping connection error",
+			numCorrectQueries: 5,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := &fakeDB{errStr: tt.errStr, numCorrectQueries: tt.numCorrectQueries}
+			s := &DuckLakeSink{db: db}
+			err := s.Provision(ctx, tt.conf)
+			require.NoError(t, err)
+			err = s.Ping(ctx, tt.conf)
+			if tt.errStr != "" {
+				require.Error(t, err)
+				require.ErrorContains(t, err, tt.errStr)
+				require.Equal(t, tt.expected, db.queries)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.expected, db.queries)
+		})
+	}
+}

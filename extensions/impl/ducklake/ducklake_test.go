@@ -6,10 +6,30 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/lf-edge/ekuiper/contract/v2/api"
 	mockContext "github.com/lf-edge/ekuiper/v2/pkg/mock/context"
 	"github.com/stretchr/testify/require"
 )
+
+type testTuple struct{ m map[string]any }
+
+func (t testTuple) Value(key, table string) (any, bool) { v, ok := t.m[key]; return v, ok }
+func (t testTuple) ToMap() map[string]any               { return t.m }
+
+type testTupleList struct{ ms []map[string]any }
+
+func (l testTupleList) Len() int                 { return len(l.ms) }
+func (l testTupleList) ToMaps() []map[string]any { return l.ms }
+func (l testTupleList) RangeOfTuples(f func(index int, tuple api.MessageTuple) bool) {
+	for i, m := range l.ms {
+		if !f(i, testTuple{m: m}) {
+			return
+		}
+	}
+}
 
 func TestProvision_Config(t *testing.T) {
 	ctx := mockContext.NewMockContext("testprovision", "op")
@@ -1022,3 +1042,140 @@ func TestPing(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildArrowData(t *testing.T) {
+	fdb := &fakeDB{}
+	s := &DuckLakeSink{db: fdb}
+
+	data := map[string]any{"t": 20}
+
+	// crea arrow array
+	mem := memory.NewCheckedAllocator(memory.DefaultAllocator)
+	defer mem.AssertSize(t, 0)
+
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "t", Type: arrow.PrimitiveTypes.Int16, Nullable: true},
+	}, nil)
+
+	rb := array.NewRecordBuilder(mem, schema)
+	defer rb.Release()
+
+	rb.Field(0).(*array.Int16Builder).Append(20)
+
+	wantsRec := rb.NewRecordBatch()
+	defer wantsRec.Release()
+
+	arrowData, err := s.buildArrowData(data)
+	require.NoError(t, err)
+
+	require.Equal(t, 1, len(fdb.queries))
+	require.Len(t, data, 1)
+	require.True(t, array.RecordEqual(wantsRec, arrowData))
+}
+
+func TestInternalCollect_HappyPath(t *testing.T) {
+	ctx := mockContext.NewMockContext("collect_ok", "op")
+
+	fdb := &fakeDB{}
+	s := &DuckLakeSink{db: fdb}
+
+	data := map[string]any{"t": 20}
+
+	err := s.collect(ctx, data)
+	require.NoError(t, err)
+
+	require.Equal(t, 1, len(fdb.queries))
+}
+
+// func TestInternalCollect_ReturnsErrorIfNotPresent(t *testing.T) {
+// 	ctx := mockContext.NewMockContext("collect_not_present", "op")
+//
+// 	s := newCollectSink(nil)
+//
+// 	data := map[string]any{"temperature": 20}
+// 	err := s.collect(ctx, data)
+// 	require.ErrorContains(t, err, "client not selected")
+// }
+//
+// func TestInternalCollect_PropagatesWritePointsErrorAsIOError(t *testing.T) {
+// 	timex.Set(10)
+// 	ctx := mockContext.NewMockContext("collect_write_err", "op")
+//
+// 	fc := &fakeInflux3Client{writeErr: errors.New("boom")}
+// 	s := newCollectSink(fc)
+//
+// 	data := map[string]any{"temperature": 20}
+// 	err := s.collect(ctx, data)
+// 	require.Error(t, err)
+// 	require.True(t, errorx.IsIOError(err))
+// 	require.Contains(t, err.Error(), "boom")
+// }
+//
+// func TestInternalCollect_TransformPointsError_DoesNotWrite(t *testing.T) {
+// 	ctx := mockContext.NewMockContext("collect_transform_err", "op")
+//
+// 	fc := &fakeInflux3Client{}
+// 	s := newCollectSink(fc)
+//
+// 	err := s.collect(ctx, []byte{1, 2, 3})
+// 	require.Error(t, err)
+// 	require.Equal(t, "sink needs map or []map, but receive unsupported data [1 2 3]", err.Error())
+// 	require.Equal(t, 0, fc.writeCalls)
+// }
+//
+// func TestCollect(t *testing.T) {
+// 	timex.Set(10)
+// 	ctx := mockContext.NewMockContext("collect_ok", "op")
+//
+// 	fc := &fakeInflux3Client{}
+// 	s := newCollectSink(fc)
+//
+// 	item := testTuple{m: map[string]any{"t": 20}}
+// 	wantsPt := []*influxdb3.Point{
+// 		influxdb3.NewPoint("m",
+// 			map[string]string{"tag": "v"},
+// 			map[string]any{"t": 20},
+// 			time.UnixMilli(10),
+// 		),
+// 	}
+//
+// 	err := s.Collect(ctx, item)
+// 	require.NoError(t, err)
+//
+// 	require.Equal(t, 1, fc.writeCalls)
+// 	require.Len(t, fc.lastPoints, 1)
+// 	require.Equal(t, wantsPt[0].Values, fc.lastPoints[0].Values)
+// }
+//
+// func TestCollectList(t *testing.T) {
+// 	timex.Set(10)
+// 	ctx := mockContext.NewMockContext("collect_ok", "op")
+//
+// 	fc := &fakeInflux3Client{}
+// 	s := newCollectSink(fc)
+//
+// 	items := testTupleList{ms: []map[string]any{
+// 		{"t": 20},
+// 		{"t": 40},
+// 	}}
+// 	wantsPt := []*influxdb3.Point{
+// 		influxdb3.NewPoint("m",
+// 			map[string]string{"tag": "v"},
+// 			map[string]any{"t": 20},
+// 			time.UnixMilli(10),
+// 		),
+// 		influxdb3.NewPoint("m",
+// 			map[string]string{"tag": "v"},
+// 			map[string]any{"t": 40},
+// 			time.UnixMilli(10),
+// 		),
+// 	}
+//
+// 	err := s.CollectList(ctx, items)
+// 	require.NoError(t, err)
+//
+// 	require.Equal(t, 1, fc.writeCalls)
+// 	require.Len(t, fc.lastPoints, 2)
+// 	require.Equal(t, wantsPt[0].Values, fc.lastPoints[0].Values)
+// 	require.Equal(t, wantsPt[1].Values, fc.lastPoints[1].Values)
+// }

@@ -333,6 +333,8 @@ type fakeDB struct {
 	queries           []string
 	errStr            string
 	numCorrectQueries int
+	closeCalls        int
+	closeErr          string
 }
 
 func (f *fakeDB) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
@@ -341,6 +343,14 @@ func (f *fakeDB) ExecContext(ctx context.Context, query string, args ...any) (sq
 		return nil, fmt.Errorf("%s", f.errStr)
 	}
 	return fakeResult{}, nil
+}
+
+func (f *fakeDB) Close() error {
+	f.closeCalls++
+	if f.closeErr != "" {
+		return fmt.Errorf("%s", f.closeErr)
+	}
+	return nil
 }
 
 type statusCall struct {
@@ -632,4 +642,34 @@ func TestConnect(t *testing.T) {
 			require.Equal(t, api.ConnectionConnected, rec.calls[1].status)
 		})
 	}
+}
+
+func TestClose(t *testing.T) {
+	ctx := mockContext.NewMockContext("testclose", "op")
+
+	t.Run("no db selected", func(t *testing.T) {
+		s := &DuckLakeSink{}
+		err := s.Close(ctx)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "error closing ducklake sink")
+		require.ErrorContains(t, err, "no db to close")
+	})
+
+	t.Run("db is not closable", func(t *testing.T) {
+		db := &fakeDB{closeErr: "db is not closable"}
+		s := &DuckLakeSink{db: db}
+		err := s.Close(ctx)
+		require.Error(t, err)
+		require.ErrorContains(t, err, "error closing ducklake sink")
+		require.ErrorContains(t, err, "db is not closable")
+		require.Equal(t, 1, db.closeCalls)
+	})
+
+	t.Run("close ok", func(t *testing.T) {
+		db := &fakeDB{}
+		s := &DuckLakeSink{db: db}
+		err := s.Close(ctx)
+		require.NoError(t, err)
+		require.Equal(t, 1, db.closeCalls)
+	})
 }

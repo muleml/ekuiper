@@ -9,11 +9,9 @@ import (
 	"github.com/lf-edge/ekuiper/v2/pkg/cast"
 )
 
-//	type ducklakeClient interface {
-//		Close() error
-//	}
 type sqlEngine interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	Close() error
 }
 
 type CatalogConf struct {
@@ -153,6 +151,17 @@ func (m *DuckLakeSink) Connect(ctx api.StreamContext, sch api.StatusChangeHandle
 
 	sch(api.ConnectionConnected, "")
 	ctx.GetLogger().Infof("ducklake sink succesfully connected")
+	return nil
+}
+
+func (m *DuckLakeSink) Close(ctx api.StreamContext) error {
+	if m.db == nil {
+		return fmt.Errorf("error closing ducklake sink: no db to close")
+	}
+	err := m.db.Close()
+	if err != nil {
+		return fmt.Errorf("error closing ducklake sink: %s", err)
+	}
 	return nil
 }
 

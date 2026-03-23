@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
+	"sync/atomic"
 	"time"
 
 	"github.com/apache/arrow-go/v18/arrow"
@@ -17,6 +18,10 @@ import (
 type sqlEngine interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 	Close() error
+}
+
+type arrowViewManager interface {
+	RegisterRecordBatch(ctx context.Context, name string, batch arrow.RecordBatch) (release func(), err error)
 }
 
 type CatalogConf struct {
@@ -44,56 +49,59 @@ type c struct {
 }
 
 type DuckLakeSink struct {
-	conf c
-	db   sqlEngine
+	conf             c
+	db               sqlEngine
+	arrowViewMgr     arrowViewManager
+	buildArrowDataFn func(map[string]any) (arrow.RecordBatch, error)
+	viewSeq          uint64
 }
 
-func (s *DuckLakeSink) Provision(ctx api.StreamContext, props map[string]any) error {
+func (d *DuckLakeSink) Provision(ctx api.StreamContext, props map[string]any) error {
 
-	s.conf = c{
+	d.conf = c{
 		Catalog: CatalogConf{
 			Type: "duckdb",
 		},
 	}
 
-	if err := cast.MapToStruct(props, &s.conf); err != nil {
+	if err := cast.MapToStruct(props, &d.conf); err != nil {
 		return fmt.Errorf("error configuring ducklake sink: %s", err)
 	}
-	if s.conf.Table == "" {
+	if d.conf.Table == "" {
 		return fmt.Errorf("error configuring ducklake sink: missing table name")
 	}
 
-	if err := cast.MapToStruct(props, &s.conf.Catalog); err != nil {
+	if err := cast.MapToStruct(props, &d.conf.Catalog); err != nil {
 		return fmt.Errorf("error configuring ducklake sink: %s", err)
 	}
 
-	switch s.conf.Catalog.Type {
+	switch d.conf.Catalog.Type {
 	case "duckdb":
 	case "postgres":
-		if s.conf.Catalog.Host == "" {
+		if d.conf.Catalog.Host == "" {
 			return fmt.Errorf("error configuring ducklake sink: host is required for postgres")
 		}
-		if s.conf.Catalog.Database == "" {
+		if d.conf.Catalog.Database == "" {
 			return fmt.Errorf("error configuring ducklake sink: database name is required for postgres")
 		}
 	default:
 		return fmt.Errorf("error configuring ducklake sink: catalog not supported")
 	}
 
-	if err := cast.MapToStruct(props, &s.conf.Storage); err != nil {
+	if err := cast.MapToStruct(props, &d.conf.Storage); err != nil {
 		return fmt.Errorf("error configuring ducklake sink: %s", err)
 	}
 
-	if s.conf.Storage.Type == "" {
+	if d.conf.Storage.Type == "" {
 		return fmt.Errorf("error configuring ducklake sink: missing storage")
 	}
 
-	switch s.conf.Storage.Type {
+	switch d.conf.Storage.Type {
 	case "s3":
-		if s.conf.Storage.Endpoint == "" {
+		if d.conf.Storage.Endpoint == "" {
 			return fmt.Errorf("error configuring ducklake sink: missing storage s3 endpoint")
 		}
-		if s.conf.Storage.Bucket == "" {
+		if d.conf.Storage.Bucket == "" {
 			return fmt.Errorf("error configuring ducklake sink: missing storage s3 bucket")
 		}
 	default:
@@ -105,50 +113,50 @@ func (s *DuckLakeSink) Provision(ctx api.StreamContext, props map[string]any) er
 	return nil
 }
 
-func (m *DuckLakeSink) Connect(ctx api.StreamContext, sch api.StatusChangeHandler) error {
+func (d *DuckLakeSink) Connect(ctx api.StreamContext, sch api.StatusChangeHandler) error {
 	sch(api.ConnectionConnecting, "")
 
 	query := "INSTALL ducklake;"
-	_, err := m.db.ExecContext(ctx, query)
+	_, err := d.db.ExecContext(ctx, query)
 	if err != nil {
 		sch(api.ConnectionDisconnected, err.Error())
 		return fmt.Errorf("Ducklake sink connection error: %s", err)
 	}
 
-	if m.conf.Catalog.Type == "postgres" {
+	if d.conf.Catalog.Type == "postgres" {
 		query := "INSTALL postgres;"
-		_, err = m.db.ExecContext(ctx, query)
+		_, err = d.db.ExecContext(ctx, query)
 		if err != nil {
 			sch(api.ConnectionDisconnected, err.Error())
 			return fmt.Errorf("Ducklake sink connection error: %s", err)
 		}
 	}
 
-	query, _ = queryCreateStorageSecret(m.conf.Storage)
-	_, err = m.db.ExecContext(ctx, query)
+	query, _ = queryCreateStorageSecret(d.conf.Storage)
+	_, err = d.db.ExecContext(ctx, query)
 	if err != nil {
 		sch(api.ConnectionDisconnected, err.Error())
 		return fmt.Errorf("Ducklake sink connection error: %s", err)
 	}
 
-	query, _ = queryCreateCatalogSecret(m.conf.Catalog)
+	query, _ = queryCreateCatalogSecret(d.conf.Catalog)
 	if query != "" {
-		_, err = m.db.ExecContext(ctx, query)
+		_, err = d.db.ExecContext(ctx, query)
 		if err != nil {
 			sch(api.ConnectionDisconnected, err.Error())
 			return fmt.Errorf("Ducklake sink connection error: %s", err)
 		}
 	}
 
-	query, _ = queryAttachDucklake(m.conf.Storage, m.conf.Catalog.Type)
-	_, err = m.db.ExecContext(ctx, query)
+	query, _ = queryAttachDucklake(d.conf.Storage, d.conf.Catalog.Type)
+	_, err = d.db.ExecContext(ctx, query)
 	if err != nil {
 		sch(api.ConnectionDisconnected, err.Error())
 		return fmt.Errorf("Ducklake sink connection error: %s", err)
 	}
 
 	query = "USE the_ducklake;"
-	_, err = m.db.ExecContext(ctx, query)
+	_, err = d.db.ExecContext(ctx, query)
 	if err != nil {
 		sch(api.ConnectionDisconnected, err.Error())
 		return fmt.Errorf("Ducklake sink connection error: %s", err)
@@ -159,64 +167,84 @@ func (m *DuckLakeSink) Connect(ctx api.StreamContext, sch api.StatusChangeHandle
 	return nil
 }
 
-func (m *DuckLakeSink) Close(ctx api.StreamContext) error {
-	if m.db == nil {
+func (d *DuckLakeSink) Close(ctx api.StreamContext) error {
+	if d.db == nil {
 		return fmt.Errorf("error closing ducklake sink: no db to close")
 	}
-	err := m.db.Close()
+	err := d.db.Close()
 	if err != nil {
 		return fmt.Errorf("error closing ducklake sink: %s", err)
 	}
 	return nil
 }
 
-func (m *DuckLakeSink) Ping(ctx api.StreamContext, props map[string]any) error {
+func (d *DuckLakeSink) Ping(ctx api.StreamContext, props map[string]any) error {
 	query := "INSTALL ducklake;"
-	_, err := m.db.ExecContext(ctx, query)
+	_, err := d.db.ExecContext(ctx, query)
 	if err != nil {
 		return fmt.Errorf("Ducklake sink ping connection error: %s", err)
 	}
 
-	if m.conf.Catalog.Type == "postgres" {
+	if d.conf.Catalog.Type == "postgres" {
 		query := "INSTALL postgres;"
-		_, err = m.db.ExecContext(ctx, query)
+		_, err = d.db.ExecContext(ctx, query)
 		if err != nil {
 			return fmt.Errorf("Ducklake sink ping connection error: %s", err)
 		}
 	}
 
-	query, _ = queryCreateStorageSecret(m.conf.Storage)
-	_, err = m.db.ExecContext(ctx, query)
+	query, _ = queryCreateStorageSecret(d.conf.Storage)
+	_, err = d.db.ExecContext(ctx, query)
 	if err != nil {
 		return fmt.Errorf("Ducklake sink ping connection error: %s", err)
 	}
 
-	query, _ = queryCreateCatalogSecret(m.conf.Catalog)
+	query, _ = queryCreateCatalogSecret(d.conf.Catalog)
 	if query != "" {
-		_, err = m.db.ExecContext(ctx, query)
+		_, err = d.db.ExecContext(ctx, query)
 		if err != nil {
 			return fmt.Errorf("Ducklake sink ping connection error: %s", err)
 		}
 	}
 
-	query, _ = queryAttachDucklake(m.conf.Storage, m.conf.Catalog.Type)
-	_, err = m.db.ExecContext(ctx, query)
+	query, _ = queryAttachDucklake(d.conf.Storage, d.conf.Catalog.Type)
+	_, err = d.db.ExecContext(ctx, query)
 	if err != nil {
 		return fmt.Errorf("Ducklake sink ping connection error: %s", err)
 	}
 
 	query = "USE memory;"
-	_, err = m.db.ExecContext(ctx, query)
+	_, err = d.db.ExecContext(ctx, query)
 	if err != nil {
 		return fmt.Errorf("Ducklake sink ping connection error: %s", err)
 	}
 	query = "DETACH the_ducklake;"
-	_, err = m.db.ExecContext(ctx, query)
+	_, err = d.db.ExecContext(ctx, query)
 	if err != nil {
 		return fmt.Errorf("Ducklake sink ping connection error: %s", err)
 	}
 
 	ctx.GetLogger().Infof("ducklake sink successful ping")
+	return nil
+}
+
+func (d *DuckLakeSink) collect(ctx api.StreamContext, data map[string]any) error {
+	// if d.db == nil {
+	// 	return fmt.Errorf("Ducklake sink collect error: db not found")
+	// }
+	// if d.arrowViewMgr == nil {
+	// 	return fmt.Errorf("Ducklake sink collect error: arrow view manager not found")
+	// }
+	arrowData, _ := d.buildArrowDataFn(data)
+	defer arrowData.Release()
+	viewName := fmt.Sprintf("__ekuiper_ducklake_%d", atomic.AddUint64(&d.viewSeq, 1))
+
+	release, _ := d.arrowViewMgr.RegisterRecordBatch(context.Background(), viewName, arrowData)
+	defer release()
+	qt, _ := quoteIdent(d.conf.Table)
+	qv, _ := quoteIdent(viewName)
+	query := fmt.Sprintf("INSERT INTO %s SELECT * FROM %s", qt, qv)
+	_, _ = d.db.ExecContext(ctx, query)
 	return nil
 }
 
@@ -280,7 +308,7 @@ func buildArrowData(data map[string]any) (arrow.RecordBatch, error) {
 	for i, k := range keys {
 		v := data[k]
 		if v == nil {
-			return nil, fmt.Errorf("error")
+			return nil, fmt.Errorf("Ducklake sink error creating arrow data: null value in field %s", k)
 		}
 		var dt arrow.DataType
 		switch v.(type) {
@@ -359,4 +387,34 @@ func toInt64(v any) (int64, error) {
 	default:
 		return 0, fmt.Errorf("Ducklake sink error creating arrow data: expected int in got %T", v)
 	}
+}
+
+// func validateIdentLoose(s string) error {
+// 	if s == "" {
+// 		return fmt.Errorf("identifier is empty")
+// 	}
+// 	if strings.Contains(s, ";") {
+// 		return fmt.Errorf("identifier contains ';'")
+// 	}
+// 	for _, r := range s {
+// 		// blocca caratteri di controllo (0x00-0x1F e 0x7F)
+// 		if r < 0x20 || r == 0x7f {
+// 			return fmt.Errorf("identifier contains control char")
+// 		}
+// 	}
+// 	return nil
+// }
+// func quoteIdentDuckDB(ident string) (string, error) {
+// 	if err := validateIdentLoose(ident); err != nil {
+// 		return "", err
+// 	}
+// 	return `"` + strings.ReplaceAll(ident, `"`, `""`) + `"`, nil
+// }
+
+func validateIdentLoose(s string) error {
+	return nil
+}
+
+func quoteIdent(ident string) (string, error) {
+	return ident, nil
 }

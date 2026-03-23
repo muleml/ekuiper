@@ -32,6 +32,65 @@ func (l testTupleList) RangeOfTuples(f func(index int, tuple api.MessageTuple) b
 	}
 }
 
+type fakeResult struct {
+	lastInsertID int64
+	rowsAffected int64
+}
+
+func (r fakeResult) LastInsertId() (int64, error) { return r.lastInsertID, nil }
+func (r fakeResult) RowsAffected() (int64, error) { return r.rowsAffected, nil }
+
+type fakeDB struct {
+	queries           []string
+	errStr            string
+	numCorrectQueries int
+	closeCalls        int
+	closeErr          string
+}
+
+func (f *fakeDB) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	f.queries = append(f.queries, query)
+	if f.errStr != "" && len(f.queries) >= f.numCorrectQueries {
+		return nil, fmt.Errorf("%s", f.errStr)
+	}
+	return fakeResult{}, nil
+}
+
+func (f *fakeDB) Close() error {
+	f.closeCalls++
+	if f.closeErr != "" {
+		return fmt.Errorf("%s", f.closeErr)
+	}
+	return nil
+}
+
+type statusCall struct {
+	status  string
+	message string
+}
+
+type statusRecorder struct {
+	calls []statusCall
+}
+
+func (r *statusRecorder) handler(status, message string) {
+	r.calls = append(r.calls, statusCall{status: status, message: message})
+}
+
+type fakeArrowViewManager struct {
+	calls    int
+	lastName string
+	released bool
+}
+
+func (f *fakeArrowViewManager) RegisterRecordBatch(_ context.Context, name string, batch arrow.RecordBatch) (func(), error) {
+	f.calls++
+	f.lastName = name
+	return func() {
+		f.released = true
+	}, nil
+}
+
 func TestProvision_Config(t *testing.T) {
 	ctx := mockContext.NewMockContext("testprovision", "op")
 
@@ -340,51 +399,6 @@ func TestProvision_Config(t *testing.T) {
 			require.Equal(t, tt.expected, s.conf)
 		})
 	}
-}
-
-type fakeResult struct {
-	lastInsertID int64
-	rowsAffected int64
-}
-
-func (r fakeResult) LastInsertId() (int64, error) { return r.lastInsertID, nil }
-func (r fakeResult) RowsAffected() (int64, error) { return r.rowsAffected, nil }
-
-type fakeDB struct {
-	queries           []string
-	errStr            string
-	numCorrectQueries int
-	closeCalls        int
-	closeErr          string
-}
-
-func (f *fakeDB) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
-	f.queries = append(f.queries, query)
-	if f.errStr != "" && len(f.queries) >= f.numCorrectQueries {
-		return nil, fmt.Errorf("%s", f.errStr)
-	}
-	return fakeResult{}, nil
-}
-
-func (f *fakeDB) Close() error {
-	f.closeCalls++
-	if f.closeErr != "" {
-		return fmt.Errorf("%s", f.closeErr)
-	}
-	return nil
-}
-
-type statusCall struct {
-	status  string
-	message string
-}
-
-type statusRecorder struct {
-	calls []statusCall
-}
-
-func (r *statusRecorder) handler(status, message string) {
-	r.calls = append(r.calls, statusCall{status: status, message: message})
 }
 
 func TestConnect(t *testing.T) {
@@ -1046,58 +1060,122 @@ func TestPing(t *testing.T) {
 
 func TestBuildArrowData(t *testing.T) {
 	ts, _ := time.Parse(time.RFC3339, "2026-03-23T10:15:30.000+02:00")
-	data := map[string]any{
-		"string":  "string",
-		"float":   1.25,
-		"integer": int64(20),
-		"boolean": true,
-		"time":    ts,
+
+	tests := []struct {
+		name      string
+		data      map[string]any
+		wantErr   string
+		emptyData bool
+		wantRec   func(t *testing.T) arrow.RecordBatch
+	}{
+		{
+			name: "happy path",
+			data: map[string]any{
+				"string":  "string",
+				"float":   1.25,
+				"integer": int64(20),
+				"boolean": true,
+				"time":    ts,
+			},
+			wantRec: func(t *testing.T) arrow.RecordBatch {
+				mem := memory.NewCheckedAllocator(memory.DefaultAllocator)
+				t.Cleanup(func() { mem.AssertSize(t, 0) })
+
+				schema := arrow.NewSchema([]arrow.Field{
+					{Name: "boolean", Type: arrow.FixedWidthTypes.Boolean, Nullable: true},
+					{Name: "float", Type: arrow.PrimitiveTypes.Float64, Nullable: true},
+					{Name: "integer", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+					{Name: "string", Type: arrow.BinaryTypes.String, Nullable: true},
+					{Name: "time", Type: arrow.FixedWidthTypes.Timestamp_ms, Nullable: true},
+				}, nil)
+
+				rb := array.NewRecordBuilder(mem, schema)
+				t.Cleanup(func() { rb.Release() })
+
+				rb.Field(0).(*array.BooleanBuilder).Append(true)
+				rb.Field(1).(*array.Float64Builder).Append(1.25)
+				rb.Field(2).(*array.Int64Builder).Append(20)
+				rb.Field(3).(*array.StringBuilder).Append("string")
+				rb.Field(4).(*array.TimestampBuilder).Append(arrow.Timestamp(ts.UnixMilli()))
+
+				rec := rb.NewRecordBatch()
+				t.Cleanup(func() { rec.Release() })
+				return rec
+			},
+		},
+		{
+			name:    "unsupported type",
+			data:    map[string]any{"a": []any{1}},
+			wantErr: "unsupported type",
+		},
+		{
+			name:    "nil value",
+			data:    map[string]any{"a": nil},
+			wantErr: "null value",
+		},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := buildArrowData(tt.data)
 
-	// create arrow array for comparison
-	mem := memory.NewCheckedAllocator(memory.DefaultAllocator)
-	defer mem.AssertSize(t, 0)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				require.ErrorContains(t, err, tt.wantErr)
+				require.Nil(t, got)
+				return
+			}
 
-	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "boolean", Type: arrow.FixedWidthTypes.Boolean, Nullable: true},
-		{Name: "float", Type: arrow.PrimitiveTypes.Float64, Nullable: true},
-		{Name: "integer", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
-		{Name: "string", Type: arrow.BinaryTypes.String, Nullable: true},
-		{Name: "time", Type: arrow.FixedWidthTypes.Timestamp_ms, Nullable: true},
-	}, nil)
+			if tt.emptyData {
+				require.NoError(t, err)
+				require.Nil(t, got)
+				return
+			}
 
-	rb := array.NewRecordBuilder(mem, schema)
-	defer rb.Release()
+			require.NoError(t, err)
+			defer got.Release()
 
-	rb.Field(0).(*array.BooleanBuilder).Append(true)
-	rb.Field(1).(*array.Float64Builder).Append(1.25)
-	rb.Field(2).(*array.Int64Builder).Append(20)
-	rb.Field(3).(*array.StringBuilder).Append("string")
-	rb.Field(4).(*array.TimestampBuilder).Append(arrow.Timestamp(ts.UnixMilli()))
-
-	wantsRec := rb.NewRecordBatch()
-	defer wantsRec.Release()
-
-	arrowData, err := buildArrowData(data)
-	require.NoError(t, err)
-
-	require.Len(t, data, 5)
-	require.True(t, array.RecordEqual(wantsRec, arrowData))
+			want := tt.wantRec(t)
+			require.True(t, array.RecordEqual(want, got))
+		})
+	}
 }
 
-// func TestInternalCollect_HappyPath(t *testing.T) {
-// 	ctx := mockContext.NewMockContext("collect_ok", "op")
-//
-// 	fdb := &fakeDB{}
-// 	s := &DuckLakeSink{db: fdb}
-//
-// 	data := map[string]any{"t": 20}
-//
-// 	err := s.collect(ctx, data)
-// 	require.NoError(t, err)
-//
-// 	require.Equal(t, 1, len(fdb.queries))
-// }
+func TestInternalCollect_HappyPath(t *testing.T) {
+	ctx := mockContext.NewMockContext("collect_ok", "op")
+
+	fdb := &fakeDB{}
+	buildCalls := 0
+	fakeBuildArrowDataFn := func(got map[string]any) (arrow.RecordBatch, error) {
+		buildCalls++
+		arrowData, err := buildArrowData(got)
+		if err != nil {
+			return nil, err
+		}
+		return arrowData, nil
+	}
+	fakeArrowViewMgr := &fakeArrowViewManager{}
+	s := &DuckLakeSink{
+		db:               fdb,
+		buildArrowDataFn: fakeBuildArrowDataFn,
+		arrowViewMgr:     fakeArrowViewMgr,
+	}
+
+	conf := map[string]any{
+		"table": "table",
+	}
+	s.Provision(ctx, conf)
+
+	data := map[string]any{"t": 20}
+
+	err := s.collect(ctx, data)
+	require.NoError(t, err)
+
+	require.Equal(t, 1, buildCalls)
+	require.Equal(t, 1, len(fdb.queries))
+	require.Equal(t, []string{"INSERT INTO table SELECT * FROM __ekuiper_ducklake_1"}, fdb.queries)
+	require.Equal(t, "__ekuiper_ducklake_1", fakeArrowViewMgr.lastName)
+	require.Equal(t, true, fakeArrowViewMgr.released)
+}
 
 // func TestInternalCollect_ReturnsErrorIfNotPresent(t *testing.T) {
 // 	ctx := mockContext.NewMockContext("collect_not_present", "op")

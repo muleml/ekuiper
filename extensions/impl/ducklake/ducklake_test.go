@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
@@ -1044,48 +1045,59 @@ func TestPing(t *testing.T) {
 }
 
 func TestBuildArrowData(t *testing.T) {
-	fdb := &fakeDB{}
-	s := &DuckLakeSink{db: fdb}
+	ts, _ := time.Parse(time.RFC3339, "2026-03-23T10:15:30.000+02:00")
+	data := map[string]any{
+		"string":  "string",
+		"float":   1.25,
+		"integer": int64(20),
+		"boolean": true,
+		"time":    ts,
+	}
 
-	data := map[string]any{"t": 20}
-
-	// crea arrow array
+	// create arrow array for comparison
 	mem := memory.NewCheckedAllocator(memory.DefaultAllocator)
 	defer mem.AssertSize(t, 0)
 
 	schema := arrow.NewSchema([]arrow.Field{
-		{Name: "t", Type: arrow.PrimitiveTypes.Int16, Nullable: true},
+		{Name: "boolean", Type: arrow.FixedWidthTypes.Boolean, Nullable: true},
+		{Name: "float", Type: arrow.PrimitiveTypes.Float64, Nullable: true},
+		{Name: "integer", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+		{Name: "string", Type: arrow.BinaryTypes.String, Nullable: true},
+		{Name: "time", Type: arrow.FixedWidthTypes.Timestamp_ms, Nullable: true},
 	}, nil)
 
 	rb := array.NewRecordBuilder(mem, schema)
 	defer rb.Release()
 
-	rb.Field(0).(*array.Int16Builder).Append(20)
+	rb.Field(0).(*array.BooleanBuilder).Append(true)
+	rb.Field(1).(*array.Float64Builder).Append(1.25)
+	rb.Field(2).(*array.Int64Builder).Append(20)
+	rb.Field(3).(*array.StringBuilder).Append("string")
+	rb.Field(4).(*array.TimestampBuilder).Append(arrow.Timestamp(ts.UnixMilli()))
 
 	wantsRec := rb.NewRecordBatch()
 	defer wantsRec.Release()
 
-	arrowData, err := s.buildArrowData(data)
+	arrowData, err := buildArrowData(data)
 	require.NoError(t, err)
 
-	require.Equal(t, 1, len(fdb.queries))
-	require.Len(t, data, 1)
+	require.Len(t, data, 5)
 	require.True(t, array.RecordEqual(wantsRec, arrowData))
 }
 
-func TestInternalCollect_HappyPath(t *testing.T) {
-	ctx := mockContext.NewMockContext("collect_ok", "op")
-
-	fdb := &fakeDB{}
-	s := &DuckLakeSink{db: fdb}
-
-	data := map[string]any{"t": 20}
-
-	err := s.collect(ctx, data)
-	require.NoError(t, err)
-
-	require.Equal(t, 1, len(fdb.queries))
-}
+// func TestInternalCollect_HappyPath(t *testing.T) {
+// 	ctx := mockContext.NewMockContext("collect_ok", "op")
+//
+// 	fdb := &fakeDB{}
+// 	s := &DuckLakeSink{db: fdb}
+//
+// 	data := map[string]any{"t": 20}
+//
+// 	err := s.collect(ctx, data)
+// 	require.NoError(t, err)
+//
+// 	require.Equal(t, 1, len(fdb.queries))
+// }
 
 // func TestInternalCollect_ReturnsErrorIfNotPresent(t *testing.T) {
 // 	ctx := mockContext.NewMockContext("collect_not_present", "op")

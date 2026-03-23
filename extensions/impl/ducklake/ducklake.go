@@ -4,7 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
+	"time"
 
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/lf-edge/ekuiper/contract/v2/api"
 	"github.com/lf-edge/ekuiper/v2/pkg/cast"
 )
@@ -256,5 +261,102 @@ func getSecret(catalogType string) (string, error) {
 		return "postgres_secret", nil
 	default:
 		return "", fmt.Errorf("error connecting ducklake sink: catalog type not supported")
+	}
+}
+
+func buildArrowData(data map[string]any) (arrow.RecordBatch, error) {
+	if len(data) < 1 {
+		return nil, nil
+	}
+	keys := make([]string, 0, len(data))
+	for k := range data {
+		keys = append(keys, k)
+	}
+	// alphabetically order keys
+	sort.Strings(keys)
+
+	fields := make([]arrow.Field, len(keys))
+	dts := make([]arrow.DataType, len(keys))
+	for i, k := range keys {
+		v := data[k]
+		if v == nil {
+			return nil, fmt.Errorf("error")
+		}
+		var dt arrow.DataType
+		switch v.(type) {
+		case string:
+			dt = arrow.BinaryTypes.String
+		case bool:
+			dt = arrow.FixedWidthTypes.Boolean
+		case float32, float64:
+			dt = arrow.PrimitiveTypes.Float64
+		case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+			dt = arrow.PrimitiveTypes.Int64
+		case time.Time:
+			dt = arrow.FixedWidthTypes.Timestamp_ms
+		default:
+			return nil, fmt.Errorf("Ducklake sink error creating arrow data: field <%s> has unsupported type <%T>", k, v)
+		}
+		fields[i] = arrow.Field{Name: k, Type: dt, Nullable: true}
+		dts[i] = dt
+	}
+	schema := arrow.NewSchema(fields, nil)
+	rb := array.NewRecordBuilder(memory.DefaultAllocator, schema)
+	defer rb.Release()
+
+	for i, k := range keys {
+		v := data[k]
+		switch dts[i].ID() {
+		case arrow.STRING:
+			rb.Field(i).(*array.StringBuilder).Append(v.(string))
+		case arrow.BOOL:
+			rb.Field(i).(*array.BooleanBuilder).Append(v.(bool))
+		case arrow.FLOAT64:
+			switch x := v.(type) {
+			case float32:
+				rb.Field(i).(*array.Float64Builder).Append(float64(x))
+			case float64:
+				rb.Field(i).(*array.Float64Builder).Append(x)
+			}
+		case arrow.INT64:
+			x, err := toInt64(v)
+			if err != nil {
+				return nil, fmt.Errorf("%s - Field <%s>", err, v)
+			}
+			rb.Field(i).(*array.Int64Builder).Append(x)
+		case arrow.TIMESTAMP:
+			t := v.(time.Time)
+			rb.Field(i).(*array.TimestampBuilder).Append(arrow.Timestamp(t.UnixMilli())) // use unix absolute time
+		default:
+			return nil, fmt.Errorf("Ducklake sink error creating arrow data: field <%q> unexpected arrow type <%s>", k, dts[i])
+		}
+	}
+	return rb.NewRecordBatch(), nil
+}
+
+func toInt64(v any) (int64, error) {
+	switch x := v.(type) {
+	case int:
+		return int64(x), nil
+	case int8:
+		return int64(x), nil
+	case int16:
+		return int64(x), nil
+	case int32:
+		return int64(x), nil
+	case int64:
+		return x, nil
+	case uint:
+		return int64(x), nil
+	case uint8:
+		return int64(x), nil
+	case uint16:
+		return int64(x), nil
+	case uint32:
+		return int64(x), nil
+	case uint64:
+		return int64(x), nil
+	default:
+		return 0, fmt.Errorf("Ducklake sink error creating arrow data: expected int in got %T", v)
 	}
 }

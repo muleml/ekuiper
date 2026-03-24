@@ -1098,6 +1098,33 @@ func TestPing(t *testing.T) {
 	}
 }
 
+func TestValidateIdentLoose(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      string
+		wantErr string
+	}{
+		{name: "empty", in: "", wantErr: "empty"},
+		{name: "semicolon", in: "t; drop table x", wantErr: "contains ';'"},
+		{name: "newline", in: "t\nx", wantErr: "control"},
+		{name: "tab", in: "t\tx", wantErr: "control"},
+		{name: "ok simple", in: "table_1"},
+		{name: "ok with space (will require quoting)", in: "my table"},
+		{name: "ok with quote (will be escaped)", in: `a"b`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateIdentLoose(tt.in)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestBuildArrowData(t *testing.T) {
 	ts, _ := time.Parse(time.RFC3339, "2026-03-23T10:15:30.000+02:00")
 
@@ -1180,7 +1207,7 @@ func TestBuildArrowData(t *testing.T) {
 	}
 }
 
-func TestInternalCollect(t *testing.T) {
+func TestCollect(t *testing.T) {
 	ctx := mockContext.NewMockContext("collect", "ok")
 
 	makeSink := func() (*DuckLakeSink, *fakeDB, *fakeArrowViewManager, *int) {
@@ -1303,7 +1330,7 @@ func TestInternalCollect(t *testing.T) {
 				tt.setup(s, fdb, fav, buildCalls)
 			}
 
-			err := s.collect(ctx, tt.data)
+			err := s.Collect(ctx, testTuple{m: tt.data})
 
 			if tt.wantErr != "" {
 				require.Error(t, err)
@@ -1320,29 +1347,366 @@ func TestInternalCollect(t *testing.T) {
 	}
 }
 
-func TestValidateIdentLoose(t *testing.T) {
-	tests := []struct {
+func TestBuildArrowDataList(t *testing.T) {
+	ts1, _ := time.Parse(time.RFC3339, "2026-03-23T10:15:30.000+02:00")
+	ts2 := ts1.Add(2 * time.Second)
+
+	type tc struct {
 		name    string
-		in      string
+		rows    []map[string]any
 		wantErr string
-	}{
-		{name: "empty", in: "", wantErr: "empty"},
-		{name: "semicolon", in: "t; drop table x", wantErr: "contains ';'"},
-		{name: "newline", in: "t\nx", wantErr: "control"},
-		{name: "tab", in: "t\tx", wantErr: "control"},
-		{name: "ok simple", in: "table_1"},
-		{name: "ok with space (will require quoting)", in: "my table"},
-		{name: "ok with quote (will be escaped)", in: `a"b`},
+		wantRec func(t *testing.T) arrow.RecordBatch
+		wantNil bool
 	}
+
+	tests := []tc{
+		{
+			name: "happy path",
+			rows: []map[string]any{
+				{"string": "a", "float": 1.25, "integer": int64(20), "boolean": true, "time": ts1},
+				{"string": "b", "float": 2.5, "integer": int64(40), "boolean": false, "time": ts2},
+			},
+			wantRec: func(t *testing.T) arrow.RecordBatch {
+				mem := memory.NewCheckedAllocator(memory.DefaultAllocator)
+				t.Cleanup(func() { mem.AssertSize(t, 0) })
+				schema := arrow.NewSchema([]arrow.Field{
+					{Name: "boolean", Type: arrow.FixedWidthTypes.Boolean, Nullable: true},
+					{Name: "float", Type: arrow.PrimitiveTypes.Float64, Nullable: true},
+					{Name: "integer", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+					{Name: "string", Type: arrow.BinaryTypes.String, Nullable: true},
+					{Name: "time", Type: arrow.FixedWidthTypes.Timestamp_ms, Nullable: true},
+				}, nil)
+				rb := array.NewRecordBuilder(mem, schema)
+				t.Cleanup(rb.Release)
+
+				// row 1
+				rb.Field(0).(*array.BooleanBuilder).Append(true)
+				rb.Field(1).(*array.Float64Builder).Append(1.25)
+				rb.Field(2).(*array.Int64Builder).Append(20)
+				rb.Field(3).(*array.StringBuilder).Append("a")
+				rb.Field(4).(*array.TimestampBuilder).Append(arrow.Timestamp(ts1.UnixMilli()))
+
+				// row 2
+				rb.Field(0).(*array.BooleanBuilder).Append(false)
+				rb.Field(1).(*array.Float64Builder).Append(2.5)
+				rb.Field(2).(*array.Int64Builder).Append(40)
+				rb.Field(3).(*array.StringBuilder).Append("b")
+				rb.Field(4).(*array.TimestampBuilder).Append(arrow.Timestamp(ts2.UnixMilli()))
+
+				rec := rb.NewRecordBatch()
+				t.Cleanup(rec.Release)
+				return rec
+			},
+		},
+		{
+			name: "float32 -> float64",
+			rows: []map[string]any{
+				{"float": float32(1.25)},
+				{"float": float32(2.5)},
+			},
+			wantRec: func(t *testing.T) arrow.RecordBatch {
+				mem := memory.NewCheckedAllocator(memory.DefaultAllocator)
+				t.Cleanup(func() { mem.AssertSize(t, 0) })
+				schema := arrow.NewSchema([]arrow.Field{
+					{Name: "float", Type: arrow.PrimitiveTypes.Float64, Nullable: true},
+				}, nil)
+				rb := array.NewRecordBuilder(mem, schema)
+				t.Cleanup(rb.Release)
+
+				// row 1
+				rb.Field(0).(*array.Float64Builder).Append(1.25)
+
+				// row 2
+				rb.Field(0).(*array.Float64Builder).Append(2.5)
+
+				rec := rb.NewRecordBatch()
+				t.Cleanup(rec.Release)
+				return rec
+			},
+		},
+		{
+			name: "missing field -> null",
+			rows: []map[string]any{
+				{"integer": int64(1), "string": "x"},
+				{"integer": int64(2)},
+			},
+			wantRec: func(t *testing.T) arrow.RecordBatch {
+				mem := memory.NewCheckedAllocator(memory.DefaultAllocator)
+				t.Cleanup(func() { mem.AssertSize(t, 0) })
+
+				// schema from first row
+				schema := arrow.NewSchema([]arrow.Field{
+					{Name: "integer", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+					{Name: "string", Type: arrow.BinaryTypes.String, Nullable: true},
+				}, nil)
+
+				rb := array.NewRecordBuilder(mem, schema)
+				t.Cleanup(rb.Release)
+
+				rb.Field(0).(*array.Int64Builder).Append(1)
+				rb.Field(1).(*array.StringBuilder).Append("x")
+
+				rb.Field(0).(*array.Int64Builder).Append(2)
+				rb.Field(1).(*array.StringBuilder).AppendNull()
+
+				rec := rb.NewRecordBatch()
+				t.Cleanup(rec.Release)
+				return rec
+			},
+		},
+		{
+			name:    "empty list",
+			rows:    nil,
+			wantNil: true,
+		},
+		{
+			name:    "first row empty",
+			rows:    []map[string]any{{}},
+			wantNil: true,
+		},
+		{
+			name: "integer type mismatch vs first row",
+			rows: []map[string]any{
+				{"integer": int64(1)},
+				{"integer": "string"},
+			},
+			wantErr: "type mismatch",
+		},
+		{
+			name: "float type mismatch vs first row",
+			rows: []map[string]any{
+				{"float": float64(1)},
+				{"float": "string"},
+			},
+			wantErr: "type mismatch",
+		},
+		{
+			name: "bool type mismatch vs first row",
+			rows: []map[string]any{
+				{"bool": true},
+				{"bool": "string"},
+			},
+			wantErr: "type mismatch",
+		},
+		{
+			name: "string type mismatch vs first row",
+			rows: []map[string]any{
+				{"string": "string"},
+				{"string": true},
+			},
+			wantErr: "type mismatch",
+		},
+		{
+			name: "timestamp type mismatch vs first row",
+			rows: []map[string]any{
+				{"time": ts1},
+				{"time": true},
+			},
+			wantErr: "type mismatch",
+		},
+	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateIdentLoose(tt.in)
+			got, err := buildArrowDataList(tt.rows)
+
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				require.ErrorContains(t, err, tt.wantErr)
+				require.Nil(t, got)
+				return
+			}
+
+			require.NoError(t, err)
+
+			if tt.wantNil {
+				require.Nil(t, got)
+				return
+			}
+
+			require.NotNil(t, got)
+			defer got.Release()
+
+			want := tt.wantRec(t)
+			require.True(t, array.RecordEqual(want, got))
+		})
+	}
+}
+
+func TestCollectList(t *testing.T) {
+	ctx := mockContext.NewMockContext("collect", "ok")
+
+	makeSink := func() (*DuckLakeSink, *fakeDB, *fakeArrowViewManager, *int) {
+		fdb := &fakeDB{}
+		fav := &fakeArrowViewManager{}
+		buildCalls := 0
+
+		d := &DuckLakeSink{
+			db:           fdb,
+			arrowViewMgr: fav,
+			buildArrowDataFn: func(got map[string]any) (arrow.RecordBatch, error) {
+				buildCalls++
+				return buildArrowData(got)
+			},
+		}
+		_ = d.Provision(ctx, map[string]any{"table": "table"})
+		return d, fdb, fav, &buildCalls
+	}
+
+	tests := []struct {
+		name           string
+		setup          func(d *DuckLakeSink, fdb *fakeDB, fav *fakeArrowViewManager, buildCalls *int)
+		data           map[string]any
+		wantErr        string
+		wantBuildCalls int
+		wantDBQueries  []string
+		wantViewCalls  int
+		wantReleased   bool
+	}{
+		{
+			name:           "happy path",
+			data:           map[string]any{"t": int64(20)},
+			wantBuildCalls: 1,
+			wantDBQueries:  []string{"INSERT INTO table SELECT * FROM __ekuiper_ducklake_1"},
+			wantViewCalls:  1,
+			wantReleased:   true,
+		},
+		{
+			name: "error: buildArrowDataFn returns error",
+			setup: func(s *DuckLakeSink, _ *fakeDB, _ *fakeArrowViewManager, buildCalls *int) {
+				s.buildArrowDataFn = func(map[string]any) (arrow.RecordBatch, error) {
+					(*buildCalls)++
+					return nil, fmt.Errorf("error")
+				}
+			},
+			data:           map[string]any{"t": int64(20)},
+			wantErr:        "arrow build failed",
+			wantBuildCalls: 1,
+			wantDBQueries:  nil,
+			wantViewCalls:  0,
+			wantReleased:   false,
+		},
+		{
+			name: "error: arrowViewMgr RegisterRecordBatch fails",
+			setup: func(_ *DuckLakeSink, _ *fakeDB, fav *fakeArrowViewManager, _ *int) {
+				fav.registerErr = fmt.Errorf("error")
+			},
+			data:           map[string]any{"t": int64(20)},
+			wantErr:        "arrow register view failed",
+			wantBuildCalls: 1,
+			wantDBQueries:  nil,
+			wantViewCalls:  1,
+			wantReleased:   false,
+		},
+		{
+			name: "error: db exec fails",
+			setup: func(_ *DuckLakeSink, fdb *fakeDB, _ *fakeArrowViewManager, _ *int) {
+				fdb.errStr = "exec failed"
+				fdb.numCorrectQueries = 1
+			},
+			data:           map[string]any{"t": int64(20)},
+			wantErr:        "db query execution failed",
+			wantBuildCalls: 1,
+			wantDBQueries:  []string{"INSERT INTO table SELECT * FROM __ekuiper_ducklake_1"},
+			wantViewCalls:  1,
+			wantReleased:   true,
+		},
+		{
+			name: "error: db not set",
+			setup: func(s *DuckLakeSink, _ *fakeDB, _ *fakeArrowViewManager, _ *int) {
+				s.db = nil
+			},
+			data:           map[string]any{"t": int64(20)},
+			wantErr:        "db not set",
+			wantBuildCalls: 0,
+			wantDBQueries:  nil,
+			wantViewCalls:  0,
+			wantReleased:   false,
+		},
+		{
+			name: "error: arrowViewMgr not set",
+			setup: func(s *DuckLakeSink, _ *fakeDB, _ *fakeArrowViewManager, _ *int) {
+				s.arrowViewMgr = nil
+			},
+			data:           map[string]any{"t": int64(20)},
+			wantErr:        "arrow view manager not set",
+			wantBuildCalls: 0,
+			wantDBQueries:  nil,
+			wantViewCalls:  0,
+			wantReleased:   false,
+		},
+		{
+			name: "error: buildArrowDataFn not set",
+			setup: func(s *DuckLakeSink, _ *fakeDB, _ *fakeArrowViewManager, _ *int) {
+				s.buildArrowDataFn = nil
+			},
+			data:           map[string]any{"t": int64(20)},
+			wantErr:        "function build arrow data not set",
+			wantBuildCalls: 0,
+			wantDBQueries:  nil,
+			wantViewCalls:  0,
+			wantReleased:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, fdb, fav, buildCalls := makeSink()
+			if tt.setup != nil {
+				tt.setup(s, fdb, fav, buildCalls)
+			}
+
+			err := s.Collect(ctx, testTuple{m: tt.data})
+
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				require.ErrorContains(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+
+			require.Equal(t, tt.wantBuildCalls, *buildCalls)
+			require.Equal(t, tt.wantDBQueries, fdb.queries)
+			require.Equal(t, tt.wantViewCalls, fav.calls)
+			require.Equal(t, tt.wantReleased, fav.released)
+		})
+	}
+}
+
+func TestToInt64(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      any
+		want    int64
+		wantErr string
+	}{
+		{name: "int", in: int(42), want: 42},
+		{name: "int8", in: int8(42), want: 42},
+		{name: "int16", in: int16(42), want: 42},
+		{name: "int32", in: int32(42), want: 42},
+		{name: "int64", in: int64(42), want: 42},
+		{name: "uint", in: uint(42), want: 42},
+		{name: "uint8", in: uint8(42), want: 42},
+		{name: "uint16", in: uint16(42), want: 42},
+		{name: "uint32", in: uint32(42), want: 42},
+		{name: "uint64", in: uint64(42), want: 42},
+		{name: "float64 is error", in: float64(1.2), wantErr: "expected int"},
+		{name: "string is error", in: "1", wantErr: "expected int"},
+		{name: "bool is error", in: true, wantErr: "expected int"},
+		{name: "time is error", in: time.UnixMilli(0), wantErr: "expected int"},
+		{name: "nil is error", in: nil, wantErr: "expected int"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := toInt64(tt.in)
 			if tt.wantErr != "" {
 				require.Error(t, err)
 				require.ErrorContains(t, err, tt.wantErr)
 				return
 			}
 			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
 		})
 	}
 }

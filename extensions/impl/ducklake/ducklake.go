@@ -25,6 +25,12 @@ type arrowViewManager interface {
 	RegisterRecordBatch(ctx context.Context, name string, batch arrow.RecordBatch) (release func(), err error)
 }
 
+type inferredSchema struct {
+	keys   []string
+	schema *arrow.Schema
+	dts    []arrow.DataType
+}
+
 type CatalogConf struct {
 	Type     string `json:"catalog_type"`
 	Host     string `json:"catalog_host"`
@@ -236,24 +242,24 @@ func (d *DuckLakeSink) Ping(ctx api.StreamContext, props map[string]any) error {
 	return nil
 }
 
-func (d *DuckLakeSink) collect(ctx api.StreamContext, data map[string]any) error {
-	if d.db == nil {
-		return fmt.Errorf("Ducklake sink collect error: db not set")
-	}
-	if d.arrowViewMgr == nil {
-		return fmt.Errorf("Ducklake sink collect error: arrow view manager not set")
-	}
-	if d.buildArrowDataFn == nil {
-		return fmt.Errorf("Ducklake sink collect error: function build arrow data not set")
+func (d *DuckLakeSink) Collect(ctx api.StreamContext, item api.MessageTuple) error {
+	data := item.ToMap()
+	err := d.checkMethodsAreSet()
+	if err != nil {
+		return fmt.Errorf("Ducklake sink collect error: %s", err)
 	}
 	arrowData, err := d.buildArrowDataFn(data)
 	if err != nil {
 		return fmt.Errorf("Ducklake sink collect error - arrow build failed: %s", err)
 	}
 	defer arrowData.Release()
+	return d.insertRecordBatch(ctx, arrowData)
+}
+
+func (d *DuckLakeSink) insertRecordBatch(ctx api.StreamContext, batch arrow.RecordBatch) error {
 	viewName := fmt.Sprintf("__ekuiper_ducklake_%d", atomic.AddUint64(&d.viewSeq, 1))
 
-	release, err := d.arrowViewMgr.RegisterRecordBatch(context.Background(), viewName, arrowData)
+	release, err := d.arrowViewMgr.RegisterRecordBatch(context.Background(), viewName, batch)
 	if err != nil {
 		return fmt.Errorf("Ducklake sink collect error - arrow register view failed: %s", err)
 	}
@@ -262,6 +268,19 @@ func (d *DuckLakeSink) collect(ctx api.StreamContext, data map[string]any) error
 	_, err = d.db.ExecContext(ctx, query)
 	if err != nil {
 		return fmt.Errorf("Ducklake sink collect error - db query execution failed: %s", err)
+	}
+	return nil
+}
+
+func (d *DuckLakeSink) checkMethodsAreSet() error {
+	if d.db == nil {
+		return fmt.Errorf("db not set")
+	}
+	if d.arrowViewMgr == nil {
+		return fmt.Errorf("arrow view manager not set")
+	}
+	if d.buildArrowDataFn == nil {
+		return fmt.Errorf("function build arrow data not set")
 	}
 	return nil
 }
@@ -312,6 +331,7 @@ func getSecret(catalogType string) (string, error) {
 
 func buildArrowData(data map[string]any) (arrow.RecordBatch, error) {
 	if len(data) < 1 {
+		// ctx.GetLogger().Errorf("send to zmq error %v", err)
 		return nil, nil
 	}
 	keys := make([]string, 0, len(data))
@@ -380,6 +400,147 @@ func buildArrowData(data map[string]any) (arrow.RecordBatch, error) {
 	return rb.NewRecordBatch(), nil
 }
 
+func buildArrowDataList(data []map[string]any) (arrow.RecordBatch, error) {
+	if len(data) < 1 {
+		return nil, nil
+	}
+	if len(data[0]) == 0 {
+		return nil, nil
+	}
+
+	// first := data[0]
+	//
+	// // schema inference from the first line
+	// keys := make([]string, 0, len(first))
+	// for k := range first {
+	// 	keys = append(keys, k)
+	// }
+	// sort.Strings(keys)
+	//
+	// fields := make([]arrow.Field, len(keys))
+	// dts := make([]arrow.DataType, len(keys))
+	//
+	// for i, k := range keys {
+	// 	v := first[k]
+	// 	var dt arrow.DataType
+	// 	switch v.(type) {
+	// 	case string:
+	// 		dt = arrow.BinaryTypes.String
+	// 	case bool:
+	// 		dt = arrow.FixedWidthTypes.Boolean
+	// 	case float32, float64:
+	// 		dt = arrow.PrimitiveTypes.Float64
+	// 	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+	// 		dt = arrow.PrimitiveTypes.Int64
+	// 	case time.Time:
+	// 		dt = arrow.FixedWidthTypes.Timestamp_ms
+	// 	default:
+	// 		return nil, fmt.Errorf("Ducklake sink error creating arrow data: field <%s> has unsupported type <%T>", k, v)
+	// 	}
+	// 	fields[i] = arrow.Field{Name: k, Type: dt, Nullable: true}
+	// 	dts[i] = dt
+	// }
+	//
+	// schema := arrow.NewSchema(fields, nil)
+	arrowInferredSchema, err := inferArrowSchemaFromRow(data[0])
+	if err != nil {
+		return nil, fmt.Errorf("Ducklake sink error creating arrow data: %s", err)
+	}
+	rb := array.NewRecordBuilder(memory.DefaultAllocator, arrowInferredSchema.schema)
+	defer rb.Release()
+
+	for _, row := range data {
+		for i, k := range arrowInferredSchema.keys {
+			v, ok := row[k]
+			if !ok || v == nil {
+				rb.Field(i).AppendNull()
+				continue
+			}
+			switch arrowInferredSchema.dts[i].ID() {
+			case arrow.STRING:
+				s, ok := v.(string)
+				if !ok {
+					return nil, fmt.Errorf("Ducklake sink error creating arrow data: type mismatch <row %d> <field %s>", i, k)
+				}
+				rb.Field(i).(*array.StringBuilder).Append(s)
+			case arrow.BOOL:
+				b, ok := v.(bool)
+				if !ok {
+					return nil, fmt.Errorf("Ducklake sink error creating arrow data: type mismatch <row %d> <field %s>", i, k)
+				}
+				rb.Field(i).(*array.BooleanBuilder).Append(b)
+			case arrow.FLOAT64:
+				switch x := v.(type) {
+				case float32:
+					rb.Field(i).(*array.Float64Builder).Append(float64(x))
+				case float64:
+					rb.Field(i).(*array.Float64Builder).Append(x)
+				default:
+					return nil, fmt.Errorf("Ducklake sink error creating arrow data: type mismatch <row %d> <field %s>", i, k)
+				}
+			case arrow.INT64:
+				x, err := toInt64(v)
+				if err != nil {
+					return nil, fmt.Errorf("Ducklake sink error creating arrow data: %s - Field <%s> - Row <%d>", err, v, i)
+				}
+				rb.Field(i).(*array.Int64Builder).Append(x)
+			case arrow.TIMESTAMP:
+				t, ok := v.(time.Time)
+				if !ok {
+					return nil, fmt.Errorf("Ducklake sink error creating arrow data: type mismatch <row %d> <field %s>", i, k)
+				}
+				rb.Field(i).(*array.TimestampBuilder).Append(arrow.Timestamp(t.UnixMilli())) // use unix absolute time
+			default:
+				return nil, fmt.Errorf("Ducklake sink error creating arrow data: type mismatch, field <%q> unexpected arrow type <%s>", k, arrowInferredSchema.dts[i])
+			}
+		}
+	}
+	return rb.NewRecordBatch(), nil
+}
+
+func inferArrowSchemaFromRow(row map[string]any) (*inferredSchema, error) {
+	if len(row) == 0 {
+		return nil, fmt.Errorf("Row is empty")
+	}
+
+	keys := make([]string, 0, len(row))
+	for k := range row {
+		if row[k] != nil {
+			// TODO: add log if row[k] is null
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+
+	fields := make([]arrow.Field, len(keys))
+	dts := make([]arrow.DataType, len(keys))
+	for i, k := range keys {
+		v := row[k]
+		var dt arrow.DataType
+		switch v.(type) {
+		case string:
+			dt = arrow.BinaryTypes.String
+		case bool:
+			dt = arrow.FixedWidthTypes.Boolean
+		case float32, float64:
+			dt = arrow.PrimitiveTypes.Float64
+		case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+			dt = arrow.PrimitiveTypes.Int64
+		case time.Time:
+			dt = arrow.FixedWidthTypes.Timestamp_ms
+		default:
+			return nil, fmt.Errorf("field <%s> has unsupported type <%T>", k, v)
+		}
+		fields[i] = arrow.Field{Name: k, Type: dt, Nullable: true}
+		dts[i] = dt
+	}
+	return &inferredSchema{
+		keys:   keys,
+		schema: arrow.NewSchema(fields, nil),
+		dts:    dts,
+	}, nil
+}
+
 func toInt64(v any) (int64, error) {
 	switch x := v.(type) {
 	case int:
@@ -403,7 +564,7 @@ func toInt64(v any) (int64, error) {
 	case uint64:
 		return int64(x), nil
 	default:
-		return 0, fmt.Errorf("Ducklake sink error creating arrow data: expected int in got %T", v)
+		return 0, fmt.Errorf("type mismatch, expected int in got %T", v)
 	}
 }
 

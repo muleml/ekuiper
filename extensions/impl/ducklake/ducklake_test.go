@@ -1176,9 +1176,9 @@ func TestBuildArrowData(t *testing.T) {
 			wantErr: "unsupported type",
 		},
 		{
-			name:    "nil value",
-			data:    map[string]any{"a": nil},
-			wantErr: "null value",
+			name:      "nil value",
+			data:      map[string]any{"a": nil},
+			emptyData: true,
 		},
 	}
 	for _, tt := range tests {
@@ -1503,6 +1503,15 @@ func TestBuildArrowDataList(t *testing.T) {
 				{"time": true},
 			},
 			wantErr: "type mismatch",
+		},
+		{
+
+			name: "nil value",
+			rows: []map[string]any{
+				{"a": nil},
+				{"a": nil},
+			},
+			wantNil: true,
 		},
 	}
 

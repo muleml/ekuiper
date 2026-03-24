@@ -334,39 +334,7 @@ func buildArrowData(data map[string]any) (arrow.RecordBatch, error) {
 		// ctx.GetLogger().Errorf("send to zmq error %v", err)
 		return nil, nil
 	}
-	// keys := make([]string, 0, len(data))
-	// for k := range data {
-	// 	keys = append(keys, k)
-	// }
-	// // alphabetically order keys
-	// sort.Strings(keys)
-	//
-	// fields := make([]arrow.Field, len(keys))
-	// dts := make([]arrow.DataType, len(keys))
-	// for i, k := range keys {
-	// 	v := data[k]
-	// 	if v == nil {
-	// 		return nil, fmt.Errorf("Ducklake sink error creating arrow data: null value in field %s", k)
-	// 	}
-	// 	var dt arrow.DataType
-	// 	switch v.(type) {
-	// 	case string:
-	// 		dt = arrow.BinaryTypes.String
-	// 	case bool:
-	// 		dt = arrow.FixedWidthTypes.Boolean
-	// 	case float32, float64:
-	// 		dt = arrow.PrimitiveTypes.Float64
-	// 	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
-	// 		dt = arrow.PrimitiveTypes.Int64
-	// 	case time.Time:
-	// 		dt = arrow.FixedWidthTypes.Timestamp_ms
-	// 	default:
-	// 		return nil, fmt.Errorf("Ducklake sink error creating arrow data: field <%s> has unsupported type <%T>", k, v)
-	// 	}
-	// 	fields[i] = arrow.Field{Name: k, Type: dt, Nullable: true}
-	// 	dts[i] = dt
-	// }
-	// schema := arrow.NewSchema(fields, nil)
+
 	arrowInferredSchema, err := inferArrowSchemaFromRow(data)
 	if err != nil {
 		return nil, fmt.Errorf("Ducklake sink error creating arrow data: %s", err)
@@ -377,32 +345,35 @@ func buildArrowData(data map[string]any) (arrow.RecordBatch, error) {
 	rb := array.NewRecordBuilder(memory.DefaultAllocator, arrowInferredSchema.schema)
 	defer rb.Release()
 
-	for i, k := range arrowInferredSchema.keys {
-		v := data[k]
-		switch arrowInferredSchema.dts[i].ID() {
-		case arrow.STRING:
-			rb.Field(i).(*array.StringBuilder).Append(v.(string))
-		case arrow.BOOL:
-			rb.Field(i).(*array.BooleanBuilder).Append(v.(bool))
-		case arrow.FLOAT64:
-			switch x := v.(type) {
-			case float32:
-				rb.Field(i).(*array.Float64Builder).Append(float64(x))
-			case float64:
-				rb.Field(i).(*array.Float64Builder).Append(x)
-			}
-		case arrow.INT64:
-			x, err := toInt64(v)
-			if err != nil {
-				return nil, fmt.Errorf("%s - Field <%s>", err, v)
-			}
-			rb.Field(i).(*array.Int64Builder).Append(x)
-		case arrow.TIMESTAMP:
-			t := v.(time.Time)
-			rb.Field(i).(*array.TimestampBuilder).Append(arrow.Timestamp(t.UnixMilli())) // use unix absolute time
-		default:
-			return nil, fmt.Errorf("Ducklake sink error creating arrow data: field <%q> unexpected arrow type <%s>", k, arrowInferredSchema.dts[i])
-		}
+	// for i, k := range arrowInferredSchema.keys {
+	// 	v := data[k]
+	// 	switch arrowInferredSchema.dts[i].ID() {
+	// 	case arrow.STRING:
+	// 		rb.Field(i).(*array.StringBuilder).Append(v.(string))
+	// 	case arrow.BOOL:
+	// 		rb.Field(i).(*array.BooleanBuilder).Append(v.(bool))
+	// 	case arrow.FLOAT64:
+	// 		switch x := v.(type) {
+	// 		case float32:
+	// 			rb.Field(i).(*array.Float64Builder).Append(float64(x))
+	// 		case float64:
+	// 			rb.Field(i).(*array.Float64Builder).Append(x)
+	// 		}
+	// 	case arrow.INT64:
+	// 		x, err := toInt64(v)
+	// 		if err != nil {
+	// 			return nil, fmt.Errorf("%s - Field <%s>", err, v)
+	// 		}
+	// 		rb.Field(i).(*array.Int64Builder).Append(x)
+	// 	case arrow.TIMESTAMP:
+	// 		t := v.(time.Time)
+	// 		rb.Field(i).(*array.TimestampBuilder).Append(arrow.Timestamp(t.UnixMilli())) // use unix absolute time
+	// 	default:
+	// 		return nil, fmt.Errorf("Ducklake sink error creating arrow data: field <%q> unexpected arrow type <%s>", k, arrowInferredSchema.dts[i])
+	// 	}
+	// }
+	if err := appendRow(rb, arrowInferredSchema, data, true); err != nil {
+		return nil, fmt.Errorf("Ducklake sink error creating arrow data: %s - ", err)
 	}
 	return rb.NewRecordBatch(), nil
 }
@@ -425,51 +396,54 @@ func buildArrowDataList(data []map[string]any) (arrow.RecordBatch, error) {
 	rb := array.NewRecordBuilder(memory.DefaultAllocator, arrowInferredSchema.schema)
 	defer rb.Release()
 
-	for _, row := range data {
-		for i, k := range arrowInferredSchema.keys {
-			v, ok := row[k]
-			if !ok || v == nil {
-				rb.Field(i).AppendNull()
-				continue
-			}
-			switch arrowInferredSchema.dts[i].ID() {
-			case arrow.STRING:
-				s, ok := v.(string)
-				if !ok {
-					return nil, fmt.Errorf("Ducklake sink error creating arrow data: type mismatch <row %d> <field %s>", i, k)
-				}
-				rb.Field(i).(*array.StringBuilder).Append(s)
-			case arrow.BOOL:
-				b, ok := v.(bool)
-				if !ok {
-					return nil, fmt.Errorf("Ducklake sink error creating arrow data: type mismatch <row %d> <field %s>", i, k)
-				}
-				rb.Field(i).(*array.BooleanBuilder).Append(b)
-			case arrow.FLOAT64:
-				switch x := v.(type) {
-				case float32:
-					rb.Field(i).(*array.Float64Builder).Append(float64(x))
-				case float64:
-					rb.Field(i).(*array.Float64Builder).Append(x)
-				default:
-					return nil, fmt.Errorf("Ducklake sink error creating arrow data: type mismatch <row %d> <field %s>", i, k)
-				}
-			case arrow.INT64:
-				x, err := toInt64(v)
-				if err != nil {
-					return nil, fmt.Errorf("Ducklake sink error creating arrow data: %s - Field <%s> - Row <%d>", err, v, i)
-				}
-				rb.Field(i).(*array.Int64Builder).Append(x)
-			case arrow.TIMESTAMP:
-				t, ok := v.(time.Time)
-				if !ok {
-					return nil, fmt.Errorf("Ducklake sink error creating arrow data: type mismatch <row %d> <field %s>", i, k)
-				}
-				rb.Field(i).(*array.TimestampBuilder).Append(arrow.Timestamp(t.UnixMilli())) // use unix absolute time
-			default:
-				return nil, fmt.Errorf("Ducklake sink error creating arrow data: type mismatch, field <%q> unexpected arrow type <%s>", k, arrowInferredSchema.dts[i])
-			}
+	for rowIdx, row := range data {
+		if err := appendRow(rb, arrowInferredSchema, row, true); err != nil {
+			return nil, fmt.Errorf("Ducklake sink error creating arrow data: %s - Row <%d>", err, rowIdx)
 		}
+		// for i, k := range arrowInferredSchema.keys {
+		// 	v, ok := row[k]
+		// 	if !ok || v == nil {
+		// 		rb.Field(i).AppendNull()
+		// 		continue
+		// 	}
+		// 	switch arrowInferredSchema.dts[i].ID() {
+		// 	case arrow.STRING:
+		// 		s, ok := v.(string)
+		// 		if !ok {
+		// 			return nil, fmt.Errorf("Ducklake sink error creating arrow data: type mismatch <row %d> <field %s>", i, k)
+		// 		}
+		// 		rb.Field(i).(*array.StringBuilder).Append(s)
+		// 	case arrow.BOOL:
+		// 		b, ok := v.(bool)
+		// 		if !ok {
+		// 			return nil, fmt.Errorf("Ducklake sink error creating arrow data: type mismatch <row %d> <field %s>", i, k)
+		// 		}
+		// 		rb.Field(i).(*array.BooleanBuilder).Append(b)
+		// 	case arrow.FLOAT64:
+		// 		switch x := v.(type) {
+		// 		case float32:
+		// 			rb.Field(i).(*array.Float64Builder).Append(float64(x))
+		// 		case float64:
+		// 			rb.Field(i).(*array.Float64Builder).Append(x)
+		// 		default:
+		// 			return nil, fmt.Errorf("Ducklake sink error creating arrow data: type mismatch <row %d> <field %s>", i, k)
+		// 		}
+		// 	case arrow.INT64:
+		// 		x, err := toInt64(v)
+		// 		if err != nil {
+		// 			return nil, fmt.Errorf("Ducklake sink error creating arrow data: %s - Field <%s> - Row <%d>", err, v, i)
+		// 		}
+		// 		rb.Field(i).(*array.Int64Builder).Append(x)
+		// 	case arrow.TIMESTAMP:
+		// 		t, ok := v.(time.Time)
+		// 		if !ok {
+		// 			return nil, fmt.Errorf("Ducklake sink error creating arrow data: type mismatch <row %d> <field %s>", i, k)
+		// 		}
+		// 		rb.Field(i).(*array.TimestampBuilder).Append(arrow.Timestamp(t.UnixMilli())) // use unix absolute time
+		// 	default:
+		// 		return nil, fmt.Errorf("Ducklake sink error creating arrow data: type mismatch, field <%q> unexpected arrow type <%s>", k, arrowInferredSchema.dts[i])
+		// 	}
+		// }
 	}
 	return rb.NewRecordBatch(), nil
 }
@@ -519,6 +493,63 @@ func inferArrowSchemaFromRow(row map[string]any) (*inferredSchema, error) {
 		schema: arrow.NewSchema(fields, nil),
 		dts:    dts,
 	}, nil
+}
+
+func appendValueToField(b array.Builder, dt arrow.DataType, v any) error {
+	switch dt.ID() {
+	case arrow.STRING:
+		s, ok := v.(string)
+		if !ok {
+			return fmt.Errorf("type mismatch, expected string")
+		}
+		b.(*array.StringBuilder).Append(s)
+	case arrow.BOOL:
+		x, ok := v.(bool)
+		if !ok {
+			return fmt.Errorf("type mismatch, expected bool")
+		}
+		b.(*array.BooleanBuilder).Append(x)
+	case arrow.FLOAT64:
+		switch x := v.(type) {
+		case float32:
+			b.(*array.Float64Builder).Append(float64(x))
+		case float64:
+			b.(*array.Float64Builder).Append(x)
+		default:
+			return fmt.Errorf("type mismatch, expected float")
+		}
+	case arrow.INT64:
+		x, err := toInt64(v)
+		if err != nil {
+			return err
+		}
+		b.(*array.Int64Builder).Append(x)
+	case arrow.TIMESTAMP:
+		t, ok := v.(time.Time)
+		if !ok {
+			return fmt.Errorf("type mismatch, expected timestamp")
+		}
+		b.(*array.TimestampBuilder).Append(arrow.Timestamp(t.UnixMilli()))
+	default:
+		return fmt.Errorf("type mismatch, unexpected arrow type")
+	}
+	return nil
+}
+
+func appendRow(rb *array.RecordBuilder, schema *inferredSchema, row map[string]any, allowNulls bool) error {
+	for colIdx, k := range schema.keys {
+		v, ok := row[k]
+		if !ok || v == nil {
+			if allowNulls {
+				rb.Field(colIdx).AppendNull()
+				continue
+			}
+		}
+		if err := appendValueToField(rb.Field(colIdx), schema.dts[colIdx], v); err != nil {
+			return fmt.Errorf("Field <%s> Value <%s> - %s", k, v, err)
+		}
+	}
+	return nil
 }
 
 func toInt64(v any) (int64, error) {

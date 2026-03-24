@@ -78,14 +78,18 @@ func (r *statusRecorder) handler(status, message string) {
 }
 
 type fakeArrowViewManager struct {
-	calls    int
-	lastName string
-	released bool
+	calls       int
+	lastName    string
+	released    bool
+	registerErr error
 }
 
 func (f *fakeArrowViewManager) RegisterRecordBatch(_ context.Context, name string, batch arrow.RecordBatch) (func(), error) {
 	f.calls++
 	f.lastName = name
+	if f.registerErr != nil {
+		return nil, f.registerErr
+	}
 	return func() {
 		f.released = true
 	}, nil
@@ -126,7 +130,8 @@ func TestProvision_Config(t *testing.T) {
 					KeyId:    "test_id",
 					Secret:   "test_secret",
 				},
-				Table: "table",
+				Table:       "table",
+				quotedTable: "table",
 			},
 		},
 		{
@@ -152,7 +157,8 @@ func TestProvision_Config(t *testing.T) {
 					KeyId:    "test_id",
 					Secret:   "test_secret",
 				},
-				Table: "table",
+				Table:       "table",
+				quotedTable: "table",
 			},
 		},
 		{
@@ -191,7 +197,8 @@ func TestProvision_Config(t *testing.T) {
 					KeyId:    "test_id",
 					Secret:   "test_secret",
 				},
-				Table: "table",
+				Table:       "table",
+				quotedTable: "table",
 			},
 		},
 		{
@@ -384,6 +391,39 @@ func TestProvision_Config(t *testing.T) {
 				"table": "table",
 			},
 			errStr: "error configuring ducklake sink: storage type not supported",
+		},
+		{
+			name: "sanitized table name",
+			conf: map[string]any{
+				"storage": map[string]any{
+					"storage_type":     "s3",
+					"storage_endpoint": "test-endpoint:9000",
+					"storage_bucket":   "ducklake",
+				},
+				"table": `my table "v1"`,
+			},
+			expected: c{
+				Catalog: CatalogConf{Type: "duckdb"},
+				Storage: StorageConf{
+					Type:     "s3",
+					Endpoint: "test-endpoint:9000",
+					Bucket:   "ducklake",
+				},
+				Table:       `my table "v1"`,
+				quotedTable: `mytablev1`,
+			},
+		},
+		{
+			name: "invalid table name",
+			conf: map[string]any{
+				"storage": map[string]any{
+					"storage_type":     "s3",
+					"storage_endpoint": "test-endpoint:9000",
+					"storage_bucket":   "ducklake",
+				},
+				"table": `; DROP TABLES`,
+			},
+			errStr: "error configuring ducklake sink: invalid table name",
 		},
 	}
 	for _, tt := range tests {
@@ -1140,42 +1180,209 @@ func TestBuildArrowData(t *testing.T) {
 	}
 }
 
-func TestInternalCollect_HappyPath(t *testing.T) {
-	ctx := mockContext.NewMockContext("collect_ok", "op")
+func TestInternalCollect(t *testing.T) {
+	ctx := mockContext.NewMockContext("collect", "ok")
 
-	fdb := &fakeDB{}
-	buildCalls := 0
-	fakeBuildArrowDataFn := func(got map[string]any) (arrow.RecordBatch, error) {
-		buildCalls++
-		arrowData, err := buildArrowData(got)
-		if err != nil {
-			return nil, err
+	makeSink := func() (*DuckLakeSink, *fakeDB, *fakeArrowViewManager, *int) {
+		fdb := &fakeDB{}
+		fav := &fakeArrowViewManager{}
+		buildCalls := 0
+
+		d := &DuckLakeSink{
+			db:           fdb,
+			arrowViewMgr: fav,
+			buildArrowDataFn: func(got map[string]any) (arrow.RecordBatch, error) {
+				buildCalls++
+				return buildArrowData(got)
+			},
 		}
-		return arrowData, nil
-	}
-	fakeArrowViewMgr := &fakeArrowViewManager{}
-	s := &DuckLakeSink{
-		db:               fdb,
-		buildArrowDataFn: fakeBuildArrowDataFn,
-		arrowViewMgr:     fakeArrowViewMgr,
+		_ = d.Provision(ctx, map[string]any{"table": "table"})
+		return d, fdb, fav, &buildCalls
 	}
 
-	conf := map[string]any{
-		"table": "table",
+	tests := []struct {
+		name           string
+		setup          func(d *DuckLakeSink, fdb *fakeDB, fav *fakeArrowViewManager, buildCalls *int)
+		data           map[string]any
+		wantErr        string
+		wantBuildCalls int
+		wantDBQueries  []string
+		wantViewCalls  int
+		wantReleased   bool
+	}{
+		{
+			name:           "happy path",
+			data:           map[string]any{"t": int64(20)},
+			wantBuildCalls: 1,
+			wantDBQueries:  []string{"INSERT INTO table SELECT * FROM __ekuiper_ducklake_1"},
+			wantViewCalls:  1,
+			wantReleased:   true,
+		},
+		{
+			name: "error: buildArrowDataFn returns error",
+			setup: func(s *DuckLakeSink, _ *fakeDB, _ *fakeArrowViewManager, buildCalls *int) {
+				s.buildArrowDataFn = func(map[string]any) (arrow.RecordBatch, error) {
+					(*buildCalls)++
+					return nil, fmt.Errorf("error")
+				}
+			},
+			data:           map[string]any{"t": int64(20)},
+			wantErr:        "arrow build failed",
+			wantBuildCalls: 1,
+			wantDBQueries:  nil,
+			wantViewCalls:  0,
+			wantReleased:   false,
+		},
+		{
+			name: "error: arrowViewMgr RegisterRecordBatch fails",
+			setup: func(_ *DuckLakeSink, _ *fakeDB, fav *fakeArrowViewManager, _ *int) {
+				fav.registerErr = fmt.Errorf("error")
+			},
+			data:           map[string]any{"t": int64(20)},
+			wantErr:        "arrow register view failed",
+			wantBuildCalls: 1,
+			wantDBQueries:  nil,
+			wantViewCalls:  1,
+			wantReleased:   false,
+		},
+		{
+			name: "error: db exec fails",
+			setup: func(_ *DuckLakeSink, fdb *fakeDB, _ *fakeArrowViewManager, _ *int) {
+				fdb.errStr = "exec failed"
+				fdb.numCorrectQueries = 1
+			},
+			data:           map[string]any{"t": int64(20)},
+			wantErr:        "db query execution failed",
+			wantBuildCalls: 1,
+			wantDBQueries:  []string{"INSERT INTO table SELECT * FROM __ekuiper_ducklake_1"},
+			wantViewCalls:  1,
+			wantReleased:   true,
+		},
+		{
+			name: "error: db not set",
+			setup: func(s *DuckLakeSink, _ *fakeDB, _ *fakeArrowViewManager, _ *int) {
+				s.db = nil
+			},
+			data:           map[string]any{"t": int64(20)},
+			wantErr:        "db not set",
+			wantBuildCalls: 0,
+			wantDBQueries:  nil,
+			wantViewCalls:  0,
+			wantReleased:   false,
+		},
+		{
+			name: "error: arrowViewMgr not set",
+			setup: func(s *DuckLakeSink, _ *fakeDB, _ *fakeArrowViewManager, _ *int) {
+				s.arrowViewMgr = nil
+			},
+			data:           map[string]any{"t": int64(20)},
+			wantErr:        "arrow view manager not set",
+			wantBuildCalls: 0,
+			wantDBQueries:  nil,
+			wantViewCalls:  0,
+			wantReleased:   false,
+		},
+		{
+			name: "error: buildArrowDataFn not set",
+			setup: func(s *DuckLakeSink, _ *fakeDB, _ *fakeArrowViewManager, _ *int) {
+				s.buildArrowDataFn = nil
+			},
+			data:           map[string]any{"t": int64(20)},
+			wantErr:        "function build arrow data not set",
+			wantBuildCalls: 0,
+			wantDBQueries:  nil,
+			wantViewCalls:  0,
+			wantReleased:   false,
+		},
 	}
-	s.Provision(ctx, conf)
 
-	data := map[string]any{"t": 20}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, fdb, fav, buildCalls := makeSink()
+			if tt.setup != nil {
+				tt.setup(s, fdb, fav, buildCalls)
+			}
 
-	err := s.collect(ctx, data)
-	require.NoError(t, err)
+			err := s.collect(ctx, tt.data)
 
-	require.Equal(t, 1, buildCalls)
-	require.Equal(t, 1, len(fdb.queries))
-	require.Equal(t, []string{"INSERT INTO table SELECT * FROM __ekuiper_ducklake_1"}, fdb.queries)
-	require.Equal(t, "__ekuiper_ducklake_1", fakeArrowViewMgr.lastName)
-	require.Equal(t, true, fakeArrowViewMgr.released)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				require.ErrorContains(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+
+			require.Equal(t, tt.wantBuildCalls, *buildCalls)
+			require.Equal(t, tt.wantDBQueries, fdb.queries)
+			require.Equal(t, tt.wantViewCalls, fav.calls)
+			require.Equal(t, tt.wantReleased, fav.released)
+		})
+	}
 }
+
+func TestValidateIdentLoose(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      string
+		wantErr string
+	}{
+		{name: "empty", in: "", wantErr: "empty"},
+		{name: "semicolon", in: "t; drop table x", wantErr: "contains ';'"},
+		{name: "newline", in: "t\nx", wantErr: "control"},
+		{name: "tab", in: "t\tx", wantErr: "control"},
+		{name: "ok simple", in: "table_1"},
+		{name: "ok with space (will require quoting)", in: "my table"},
+		{name: "ok with quote (will be escaped)", in: `a"b`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateIdentLoose(tt.in)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+// func TestInternalCollect_HappyPath(t *testing.T) {
+// 	ctx := mockContext.NewMockContext("collect_ok", "op")
+//
+// 	fdb := &fakeDB{}
+// 	buildCalls := 0
+// 	fakeBuildArrowDataFn := func(got map[string]any) (arrow.RecordBatch, error) {
+// 		buildCalls++
+// 		arrowData, err := buildArrowData(got)
+// 		if err != nil {
+// 			return nil, err
+// 		}
+// 		return arrowData, nil
+// 	}
+// 	fakeArrowViewMgr := &fakeArrowViewManager{}
+// 	s := &DuckLakeSink{
+// 		db:               fdb,
+// 		buildArrowDataFn: fakeBuildArrowDataFn,
+// 		arrowViewMgr:     fakeArrowViewMgr,
+// 	}
+//
+// 	conf := map[string]any{
+// 		"table": "table",
+// 	}
+// 	s.Provision(ctx, conf)
+//
+// 	data := map[string]any{"t": 20}
+//
+// 	err := s.collect(ctx, data)
+// 	require.NoError(t, err)
+//
+// 	require.Equal(t, 1, buildCalls)
+// 	require.Equal(t, 1, len(fdb.queries))
+// 	require.Equal(t, []string{"INSERT INTO table SELECT * FROM __ekuiper_ducklake_1"}, fdb.queries)
+// 	require.Equal(t, "__ekuiper_ducklake_1", fakeArrowViewMgr.lastName)
+// 	require.Equal(t, true, fakeArrowViewMgr.released)
+// }
 
 // func TestInternalCollect_ReturnsErrorIfNotPresent(t *testing.T) {
 // 	ctx := mockContext.NewMockContext("collect_not_present", "op")

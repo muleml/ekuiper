@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -42,7 +43,8 @@ type StorageConf struct {
 }
 
 type c struct {
-	Table string `json:"table"`
+	Table       string `json:"table"`
+	quotedTable string
 
 	Storage StorageConf
 	Catalog CatalogConf
@@ -70,6 +72,12 @@ func (d *DuckLakeSink) Provision(ctx api.StreamContext, props map[string]any) er
 	if d.conf.Table == "" {
 		return fmt.Errorf("error configuring ducklake sink: missing table name")
 	}
+	if err := validateIdentLoose(d.conf.Table); err != nil {
+		return fmt.Errorf("error configuring ducklake sink: invalid table name %s", d.conf.Table)
+	}
+	// input sanitizer
+	d.conf.quotedTable = strings.ReplaceAll(d.conf.Table, `"`, ``)
+	d.conf.quotedTable = strings.ReplaceAll(d.conf.quotedTable, ` `, ``)
 
 	if err := cast.MapToStruct(props, &d.conf.Catalog); err != nil {
 		return fmt.Errorf("error configuring ducklake sink: %s", err)
@@ -229,22 +237,32 @@ func (d *DuckLakeSink) Ping(ctx api.StreamContext, props map[string]any) error {
 }
 
 func (d *DuckLakeSink) collect(ctx api.StreamContext, data map[string]any) error {
-	// if d.db == nil {
-	// 	return fmt.Errorf("Ducklake sink collect error: db not found")
-	// }
-	// if d.arrowViewMgr == nil {
-	// 	return fmt.Errorf("Ducklake sink collect error: arrow view manager not found")
-	// }
-	arrowData, _ := d.buildArrowDataFn(data)
+	if d.db == nil {
+		return fmt.Errorf("Ducklake sink collect error: db not set")
+	}
+	if d.arrowViewMgr == nil {
+		return fmt.Errorf("Ducklake sink collect error: arrow view manager not set")
+	}
+	if d.buildArrowDataFn == nil {
+		return fmt.Errorf("Ducklake sink collect error: function build arrow data not set")
+	}
+	arrowData, err := d.buildArrowDataFn(data)
+	if err != nil {
+		return fmt.Errorf("Ducklake sink collect error - arrow build failed: %s", err)
+	}
 	defer arrowData.Release()
 	viewName := fmt.Sprintf("__ekuiper_ducklake_%d", atomic.AddUint64(&d.viewSeq, 1))
 
-	release, _ := d.arrowViewMgr.RegisterRecordBatch(context.Background(), viewName, arrowData)
+	release, err := d.arrowViewMgr.RegisterRecordBatch(context.Background(), viewName, arrowData)
+	if err != nil {
+		return fmt.Errorf("Ducklake sink collect error - arrow register view failed: %s", err)
+	}
 	defer release()
-	qt, _ := quoteIdent(d.conf.Table)
-	qv, _ := quoteIdent(viewName)
-	query := fmt.Sprintf("INSERT INTO %s SELECT * FROM %s", qt, qv)
-	_, _ = d.db.ExecContext(ctx, query)
+	query := fmt.Sprintf("INSERT INTO %s SELECT * FROM %s", d.conf.quotedTable, viewName)
+	_, err = d.db.ExecContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("Ducklake sink collect error - db query execution failed: %s", err)
+	}
 	return nil
 }
 
@@ -389,32 +407,18 @@ func toInt64(v any) (int64, error) {
 	}
 }
 
-// func validateIdentLoose(s string) error {
-// 	if s == "" {
-// 		return fmt.Errorf("identifier is empty")
-// 	}
-// 	if strings.Contains(s, ";") {
-// 		return fmt.Errorf("identifier contains ';'")
-// 	}
-// 	for _, r := range s {
-// 		// blocca caratteri di controllo (0x00-0x1F e 0x7F)
-// 		if r < 0x20 || r == 0x7f {
-// 			return fmt.Errorf("identifier contains control char")
-// 		}
-// 	}
-// 	return nil
-// }
-// func quoteIdentDuckDB(ident string) (string, error) {
-// 	if err := validateIdentLoose(ident); err != nil {
-// 		return "", err
-// 	}
-// 	return `"` + strings.ReplaceAll(ident, `"`, `""`) + `"`, nil
-// }
-
 func validateIdentLoose(s string) error {
+	if s == "" {
+		return fmt.Errorf("identifier is empty")
+	}
+	if strings.Contains(s, ";") {
+		return fmt.Errorf("identifier contains ';'")
+	}
+	for _, r := range s {
+		// blocca caratteri di controllo (0x00-0x1F e 0x7F)
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("identifier contains control char")
+		}
+	}
 	return nil
-}
-
-func quoteIdent(ident string) (string, error) {
-	return ident, nil
 }

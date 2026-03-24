@@ -345,33 +345,6 @@ func buildArrowData(data map[string]any) (arrow.RecordBatch, error) {
 	rb := array.NewRecordBuilder(memory.DefaultAllocator, arrowInferredSchema.schema)
 	defer rb.Release()
 
-	// for i, k := range arrowInferredSchema.keys {
-	// 	v := data[k]
-	// 	switch arrowInferredSchema.dts[i].ID() {
-	// 	case arrow.STRING:
-	// 		rb.Field(i).(*array.StringBuilder).Append(v.(string))
-	// 	case arrow.BOOL:
-	// 		rb.Field(i).(*array.BooleanBuilder).Append(v.(bool))
-	// 	case arrow.FLOAT64:
-	// 		switch x := v.(type) {
-	// 		case float32:
-	// 			rb.Field(i).(*array.Float64Builder).Append(float64(x))
-	// 		case float64:
-	// 			rb.Field(i).(*array.Float64Builder).Append(x)
-	// 		}
-	// 	case arrow.INT64:
-	// 		x, err := toInt64(v)
-	// 		if err != nil {
-	// 			return nil, fmt.Errorf("%s - Field <%s>", err, v)
-	// 		}
-	// 		rb.Field(i).(*array.Int64Builder).Append(x)
-	// 	case arrow.TIMESTAMP:
-	// 		t := v.(time.Time)
-	// 		rb.Field(i).(*array.TimestampBuilder).Append(arrow.Timestamp(t.UnixMilli())) // use unix absolute time
-	// 	default:
-	// 		return nil, fmt.Errorf("Ducklake sink error creating arrow data: field <%q> unexpected arrow type <%s>", k, arrowInferredSchema.dts[i])
-	// 	}
-	// }
 	if err := appendRow(rb, arrowInferredSchema, data, true); err != nil {
 		return nil, fmt.Errorf("Ducklake sink error creating arrow data: %s - ", err)
 	}
@@ -400,50 +373,6 @@ func buildArrowDataList(data []map[string]any) (arrow.RecordBatch, error) {
 		if err := appendRow(rb, arrowInferredSchema, row, true); err != nil {
 			return nil, fmt.Errorf("Ducklake sink error creating arrow data: %s - Row <%d>", err, rowIdx)
 		}
-		// for i, k := range arrowInferredSchema.keys {
-		// 	v, ok := row[k]
-		// 	if !ok || v == nil {
-		// 		rb.Field(i).AppendNull()
-		// 		continue
-		// 	}
-		// 	switch arrowInferredSchema.dts[i].ID() {
-		// 	case arrow.STRING:
-		// 		s, ok := v.(string)
-		// 		if !ok {
-		// 			return nil, fmt.Errorf("Ducklake sink error creating arrow data: type mismatch <row %d> <field %s>", i, k)
-		// 		}
-		// 		rb.Field(i).(*array.StringBuilder).Append(s)
-		// 	case arrow.BOOL:
-		// 		b, ok := v.(bool)
-		// 		if !ok {
-		// 			return nil, fmt.Errorf("Ducklake sink error creating arrow data: type mismatch <row %d> <field %s>", i, k)
-		// 		}
-		// 		rb.Field(i).(*array.BooleanBuilder).Append(b)
-		// 	case arrow.FLOAT64:
-		// 		switch x := v.(type) {
-		// 		case float32:
-		// 			rb.Field(i).(*array.Float64Builder).Append(float64(x))
-		// 		case float64:
-		// 			rb.Field(i).(*array.Float64Builder).Append(x)
-		// 		default:
-		// 			return nil, fmt.Errorf("Ducklake sink error creating arrow data: type mismatch <row %d> <field %s>", i, k)
-		// 		}
-		// 	case arrow.INT64:
-		// 		x, err := toInt64(v)
-		// 		if err != nil {
-		// 			return nil, fmt.Errorf("Ducklake sink error creating arrow data: %s - Field <%s> - Row <%d>", err, v, i)
-		// 		}
-		// 		rb.Field(i).(*array.Int64Builder).Append(x)
-		// 	case arrow.TIMESTAMP:
-		// 		t, ok := v.(time.Time)
-		// 		if !ok {
-		// 			return nil, fmt.Errorf("Ducklake sink error creating arrow data: type mismatch <row %d> <field %s>", i, k)
-		// 		}
-		// 		rb.Field(i).(*array.TimestampBuilder).Append(arrow.Timestamp(t.UnixMilli())) // use unix absolute time
-		// 	default:
-		// 		return nil, fmt.Errorf("Ducklake sink error creating arrow data: type mismatch, field <%q> unexpected arrow type <%s>", k, arrowInferredSchema.dts[i])
-		// 	}
-		// }
 	}
 	return rb.NewRecordBatch(), nil
 }

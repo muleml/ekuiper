@@ -95,6 +95,34 @@ func (f *fakeArrowViewManager) RegisterRecordBatch(_ context.Context, name strin
 	}, nil
 }
 
+type fakeLogger struct {
+	errorf []string
+}
+
+func (l *fakeLogger) Debug(args ...any)     {}
+func (l *fakeLogger) Debugf(string, ...any) {}
+func (l *fakeLogger) Info(args ...any)      {}
+func (l *fakeLogger) Infof(string, ...any)  {}
+func (l *fakeLogger) Warn(args ...any)      {}
+func (l *fakeLogger) Warnf(string, ...any)  {}
+func (l *fakeLogger) Error(args ...any)     {}
+func (l *fakeLogger) Errorf(format string, args ...any) {
+	l.errorf = append(l.errorf, fmt.Sprintf(format, args...))
+}
+
+type loggerOverrideCtx struct {
+	api.StreamContext
+	l api.Logger
+}
+
+func (c *loggerOverrideCtx) GetLogger() api.Logger { return c.l }
+
+func newMockCtxWithFakeLogger(rule, op string) (api.StreamContext, *fakeLogger) {
+	base := mockContext.NewMockContext(rule, op)
+	fl := &fakeLogger{}
+	return &loggerOverrideCtx{StreamContext: base, l: fl}, fl
+}
+
 func TestProvision_Config(t *testing.T) {
 	ctx := mockContext.NewMockContext("testprovision", "op")
 
@@ -1126,6 +1154,8 @@ func TestValidateIdentLoose(t *testing.T) {
 }
 
 func TestBuildArrowData(t *testing.T) {
+	ctx, _ := newMockCtxWithFakeLogger("collect", "op")
+
 	ts, _ := time.Parse(time.RFC3339, "2026-03-23T10:15:30.000+02:00")
 
 	tests := []struct {
@@ -1183,7 +1213,7 @@ func TestBuildArrowData(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := buildArrowData(tt.data)
+			got, err := buildArrowData(ctx, tt.data)
 
 			if tt.wantErr != "" {
 				require.Error(t, err)
@@ -1208,7 +1238,7 @@ func TestBuildArrowData(t *testing.T) {
 }
 
 func TestCollect(t *testing.T) {
-	ctx := mockContext.NewMockContext("collect", "ok")
+	ctx, _ := newMockCtxWithFakeLogger("collect", "op")
 
 	makeSink := func() (*DuckLakeSink, *fakeDB, *fakeArrowViewManager, *int) {
 		fdb := &fakeDB{}
@@ -1218,9 +1248,9 @@ func TestCollect(t *testing.T) {
 		d := &DuckLakeSink{
 			db:           fdb,
 			arrowViewMgr: fav,
-			buildArrowDataFn: func(got map[string]any) (arrow.RecordBatch, error) {
+			buildArrowDataFn: func(ctx api.StreamContext, got map[string]any) (arrow.RecordBatch, error) {
 				buildCalls++
-				return buildArrowData(got)
+				return buildArrowData(ctx, got)
 			},
 		}
 		_ = d.Provision(ctx, map[string]any{"table": "table"})
@@ -1248,7 +1278,7 @@ func TestCollect(t *testing.T) {
 		{
 			name: "error: buildArrowDataFn returns error",
 			setup: func(s *DuckLakeSink, _ *fakeDB, _ *fakeArrowViewManager, buildCalls *int) {
-				s.buildArrowDataFn = func(map[string]any) (arrow.RecordBatch, error) {
+				s.buildArrowDataFn = func(api.StreamContext, map[string]any) (arrow.RecordBatch, error) {
 					(*buildCalls)++
 					return nil, fmt.Errorf("error")
 				}
@@ -1347,16 +1377,172 @@ func TestCollect(t *testing.T) {
 	}
 }
 
+func TestInferArrowSchema(t *testing.T) {
+	ctx, fl := newMockCtxWithFakeLogger("inferArrowSchema", "op")
+	ts1, _ := time.Parse(time.RFC3339, "2026-03-23T10:15:30.000+02:00")
+	// ts2 := ts1.Add(2 * time.Second)
+
+	type tc struct {
+		name            string
+		row             map[string]any
+		wantErr         string
+		wantSchema      *arrow.Schema
+		wantNil         bool
+		wantLogContains []string
+	}
+
+	tests := []tc{
+		{
+			name: "happy path",
+			row:  map[string]any{"string": "a", "float": 1.25, "integer": int64(20), "boolean": true, "time": ts1},
+			wantSchema: arrow.NewSchema([]arrow.Field{
+				{Name: "boolean", Type: arrow.FixedWidthTypes.Boolean, Nullable: true},
+				{Name: "float", Type: arrow.PrimitiveTypes.Float64, Nullable: true},
+				{Name: "integer", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+				{Name: "string", Type: arrow.BinaryTypes.String, Nullable: true},
+				{Name: "time", Type: arrow.FixedWidthTypes.Timestamp_ms, Nullable: true},
+			}, nil),
+		},
+		{
+			name: "float32 -> float64",
+			row:  map[string]any{"float": float32(1.25)},
+			wantSchema: arrow.NewSchema([]arrow.Field{
+				{Name: "float", Type: arrow.PrimitiveTypes.Float64, Nullable: true},
+			}, nil),
+		},
+		{
+			name: "float64 -> float64",
+			row:  map[string]any{"float": float64(1.25)},
+			wantSchema: arrow.NewSchema([]arrow.Field{
+				{Name: "float", Type: arrow.PrimitiveTypes.Float64, Nullable: true},
+			}, nil),
+		},
+
+		{
+			name: "uint -> int64",
+			row:  map[string]any{"integer": uint(1)},
+			wantSchema: arrow.NewSchema([]arrow.Field{
+				{Name: "integer", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+			}, nil),
+		},
+		{
+			name: "uint8 -> int64",
+			row:  map[string]any{"integer": uint8(1)},
+			wantSchema: arrow.NewSchema([]arrow.Field{
+				{Name: "integer", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+			}, nil),
+		},
+		{
+			name: "uint16 -> int64",
+			row:  map[string]any{"integer": uint16(1)},
+			wantSchema: arrow.NewSchema([]arrow.Field{
+				{Name: "integer", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+			}, nil),
+		},
+		{
+			name: "uint32 -> int64",
+			row:  map[string]any{"integer": uint32(1)},
+			wantSchema: arrow.NewSchema([]arrow.Field{
+				{Name: "integer", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+			}, nil),
+		},
+		{
+			name: "uint64 -> int64",
+			row:  map[string]any{"integer": uint64(1)},
+			wantSchema: arrow.NewSchema([]arrow.Field{
+				{Name: "integer", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+			}, nil),
+		},
+		{
+			name: "int -> int64",
+			row:  map[string]any{"integer": int(1)},
+			wantSchema: arrow.NewSchema([]arrow.Field{
+				{Name: "integer", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+			}, nil),
+		},
+		{
+			name: "int8 -> int64",
+			row:  map[string]any{"integer": int8(1)},
+			wantSchema: arrow.NewSchema([]arrow.Field{
+				{Name: "integer", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+			}, nil),
+		},
+		{
+			name: "int16 -> int64",
+			row:  map[string]any{"integer": int16(1)},
+			wantSchema: arrow.NewSchema([]arrow.Field{
+				{Name: "integer", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+			}, nil),
+		},
+		{
+			name: "int32 -> int64",
+			row:  map[string]any{"integer": int32(1)},
+			wantSchema: arrow.NewSchema([]arrow.Field{
+				{Name: "integer", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+			}, nil),
+		},
+		{
+			name: "int64 -> int64",
+			row:  map[string]any{"integer": int64(1)},
+			wantSchema: arrow.NewSchema([]arrow.Field{
+				{Name: "integer", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+			}, nil),
+		},
+		{
+			name:            "null arrow data: empty value first row",
+			row:             map[string]any{"t": nil},
+			wantNil:         true,
+			wantLogContains: []string{"empty inferred schema"},
+		},
+		{
+			name:    "null arrow data: empty row",
+			row:     nil,
+			wantErr: "Ducklake sink: row is empty",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fl.errorf = nil
+			got, err := inferArrowSchemaFromRow(ctx, tt.row)
+
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				require.ErrorContains(t, err, tt.wantErr)
+				require.Nil(t, got)
+				return
+			}
+
+			require.NoError(t, err)
+
+			if len(tt.wantLogContains) == 0 {
+				for _, want := range tt.wantLogContains {
+					require.Contains(t, fl.errorf, want)
+				}
+			}
+			if tt.wantNil {
+				require.Nil(t, got)
+				return
+			}
+
+			require.NotNil(t, got)
+			require.True(t, tt.wantSchema.Equal(got.schema))
+
+		})
+	}
+}
 func TestBuildArrowDataList(t *testing.T) {
+	ctx, fl := newMockCtxWithFakeLogger("buildArrowDataList", "op")
 	ts1, _ := time.Parse(time.RFC3339, "2026-03-23T10:15:30.000+02:00")
 	ts2 := ts1.Add(2 * time.Second)
 
 	type tc struct {
-		name    string
-		rows    []map[string]any
-		wantErr string
-		wantRec func(t *testing.T) arrow.RecordBatch
-		wantNil bool
+		name            string
+		rows            []map[string]any
+		wantErr         string
+		wantRec         func(t *testing.T) arrow.RecordBatch
+		wantNil         bool
+		wantLogContains []string
 	}
 
 	tests := []tc{
@@ -1455,16 +1641,6 @@ func TestBuildArrowDataList(t *testing.T) {
 			},
 		},
 		{
-			name:    "empty list",
-			rows:    nil,
-			wantNil: true,
-		},
-		{
-			name:    "first row empty",
-			rows:    []map[string]any{{}},
-			wantNil: true,
-		},
-		{
 			name: "integer type mismatch vs first row",
 			rows: []map[string]any{
 				{"integer": int64(1)},
@@ -1505,19 +1681,79 @@ func TestBuildArrowDataList(t *testing.T) {
 			wantErr: "type mismatch",
 		},
 		{
+			name:            "null arrow data: empty data",
+			rows:            []map[string]any{},
+			wantNil:         true,
+			wantLogContains: []string{"empty data"},
+		},
+		{
+			name:            "null arrow data: empty first row",
+			rows:            []map[string]any{{"a": nil}},
+			wantNil:         true,
+			wantLogContains: []string{"empty first row"},
+		},
+		{
+			name:            "null arrow data: empty value first row",
+			rows:            []map[string]any{{"t": nil}, {"t": int64(40)}},
+			wantNil:         true,
+			wantLogContains: []string{"empty inferred schema"},
+		},
+		{
+			name:    "null arrow data: empty value second row",
+			rows:    []map[string]any{{"t": int64(20)}, {"t": nil}},
+			wantNil: false,
+			wantRec: func(t *testing.T) arrow.RecordBatch {
+				mem := memory.NewCheckedAllocator(memory.DefaultAllocator)
+				t.Cleanup(func() { mem.AssertSize(t, 0) })
 
-			name: "nil value",
-			rows: []map[string]any{
-				{"a": nil},
-				{"a": nil},
+				// schema from first row
+				schema := arrow.NewSchema([]arrow.Field{
+					{Name: "t", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+				}, nil)
+
+				rb := array.NewRecordBuilder(mem, schema)
+				t.Cleanup(rb.Release)
+
+				rb.Field(0).(*array.Int64Builder).Append(20)
+				rb.Field(0).(*array.Int64Builder).AppendNull()
+
+				rec := rb.NewRecordBatch()
+				t.Cleanup(rec.Release)
+				return rec
 			},
-			wantNil: true,
+			wantLogContains: []string{"empty value Row <1> Field <t>"},
+		},
+		{
+			name:    "null arrow data: empty value first row second field",
+			rows:    []map[string]any{{"a": int64(20), "b": nil}, {"a": int64(20), "b": int64(40)}},
+			wantNil: false,
+			wantRec: func(t *testing.T) arrow.RecordBatch {
+				mem := memory.NewCheckedAllocator(memory.DefaultAllocator)
+				t.Cleanup(func() { mem.AssertSize(t, 0) })
+
+				// schema from first row
+				schema := arrow.NewSchema([]arrow.Field{
+					{Name: "a", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+				}, nil)
+
+				rb := array.NewRecordBuilder(mem, schema)
+				t.Cleanup(rb.Release)
+
+				rb.Field(0).(*array.Int64Builder).Append(20)
+				rb.Field(0).(*array.Int64Builder).Append(20)
+
+				rec := rb.NewRecordBatch()
+				t.Cleanup(rec.Release)
+				return rec
+			},
+			wantLogContains: []string{"empty value inferring schema, field <b>"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := buildArrowDataList(tt.rows)
+			fl.errorf = nil
+			got, err := buildArrowDataList(ctx, tt.rows)
 
 			if tt.wantErr != "" {
 				require.Error(t, err)
@@ -1530,20 +1766,27 @@ func TestBuildArrowDataList(t *testing.T) {
 
 			if tt.wantNil {
 				require.Nil(t, got)
-				return
 			}
 
-			require.NotNil(t, got)
-			defer got.Release()
+			if len(tt.wantLogContains) == 0 {
+				for _, want := range tt.wantLogContains {
+					require.Contains(t, fl.errorf, want)
+				}
+			}
 
-			want := tt.wantRec(t)
-			require.True(t, array.RecordEqual(want, got))
+			if len(tt.wantLogContains) == 0 && !tt.wantNil {
+				require.NotNil(t, got)
+				defer got.Release()
+
+				want := tt.wantRec(t)
+				require.True(t, array.RecordEqual(want, got))
+			}
 		})
 	}
 }
 
 func TestCollectList(t *testing.T) {
-	ctx := mockContext.NewMockContext("collect", "ok")
+	ctx, _ := newMockCtxWithFakeLogger("collectList", "op")
 
 	makeSink := func() (*DuckLakeSink, *fakeDB, *fakeArrowViewManager, *int) {
 		fdb := &fakeDB{}
@@ -1553,9 +1796,9 @@ func TestCollectList(t *testing.T) {
 		d := &DuckLakeSink{
 			db:           fdb,
 			arrowViewMgr: fav,
-			buildArrowDataFn: func(got map[string]any) (arrow.RecordBatch, error) {
+			buildArrowDataListFn: func(ctx api.StreamContext, got []map[string]any) (arrow.RecordBatch, error) {
 				buildCalls++
-				return buildArrowData(got)
+				return buildArrowDataList(ctx, got)
 			},
 		}
 		_ = d.Provision(ctx, map[string]any{"table": "table"})
@@ -1565,30 +1808,31 @@ func TestCollectList(t *testing.T) {
 	tests := []struct {
 		name           string
 		setup          func(d *DuckLakeSink, fdb *fakeDB, fav *fakeArrowViewManager, buildCalls *int)
-		data           map[string]any
+		data           []map[string]any
 		wantErr        string
 		wantBuildCalls int
 		wantDBQueries  []string
 		wantViewCalls  int
 		wantReleased   bool
+		// wantLogContains string
 	}{
 		{
 			name:           "happy path",
-			data:           map[string]any{"t": int64(20)},
+			data:           []map[string]any{{"t": int64(20)}, {"t": int64(40)}},
 			wantBuildCalls: 1,
 			wantDBQueries:  []string{"INSERT INTO table SELECT * FROM __ekuiper_ducklake_1"},
 			wantViewCalls:  1,
 			wantReleased:   true,
 		},
 		{
-			name: "error: buildArrowDataFn returns error",
+			name: "error: buildArrowDataListFn returns error",
 			setup: func(s *DuckLakeSink, _ *fakeDB, _ *fakeArrowViewManager, buildCalls *int) {
-				s.buildArrowDataFn = func(map[string]any) (arrow.RecordBatch, error) {
+				s.buildArrowDataListFn = func(api.StreamContext, []map[string]any) (arrow.RecordBatch, error) {
 					(*buildCalls)++
 					return nil, fmt.Errorf("error")
 				}
 			},
-			data:           map[string]any{"t": int64(20)},
+			data:           []map[string]any{{"t": int64(20)}, {"t": int64(40)}},
 			wantErr:        "arrow build failed",
 			wantBuildCalls: 1,
 			wantDBQueries:  nil,
@@ -1600,7 +1844,7 @@ func TestCollectList(t *testing.T) {
 			setup: func(_ *DuckLakeSink, _ *fakeDB, fav *fakeArrowViewManager, _ *int) {
 				fav.registerErr = fmt.Errorf("error")
 			},
-			data:           map[string]any{"t": int64(20)},
+			data:           []map[string]any{{"t": int64(20)}, {"t": int64(40)}},
 			wantErr:        "arrow register view failed",
 			wantBuildCalls: 1,
 			wantDBQueries:  nil,
@@ -1613,7 +1857,7 @@ func TestCollectList(t *testing.T) {
 				fdb.errStr = "exec failed"
 				fdb.numCorrectQueries = 1
 			},
-			data:           map[string]any{"t": int64(20)},
+			data:           []map[string]any{{"t": int64(20)}, {"t": int64(40)}},
 			wantErr:        "db query execution failed",
 			wantBuildCalls: 1,
 			wantDBQueries:  []string{"INSERT INTO table SELECT * FROM __ekuiper_ducklake_1"},
@@ -1625,7 +1869,7 @@ func TestCollectList(t *testing.T) {
 			setup: func(s *DuckLakeSink, _ *fakeDB, _ *fakeArrowViewManager, _ *int) {
 				s.db = nil
 			},
-			data:           map[string]any{"t": int64(20)},
+			data:           []map[string]any{{"t": int64(20)}, {"t": int64(40)}},
 			wantErr:        "db not set",
 			wantBuildCalls: 0,
 			wantDBQueries:  nil,
@@ -1637,7 +1881,7 @@ func TestCollectList(t *testing.T) {
 			setup: func(s *DuckLakeSink, _ *fakeDB, _ *fakeArrowViewManager, _ *int) {
 				s.arrowViewMgr = nil
 			},
-			data:           map[string]any{"t": int64(20)},
+			data:           []map[string]any{{"t": int64(20)}, {"t": int64(40)}},
 			wantErr:        "arrow view manager not set",
 			wantBuildCalls: 0,
 			wantDBQueries:  nil,
@@ -1647,9 +1891,9 @@ func TestCollectList(t *testing.T) {
 		{
 			name: "error: buildArrowDataFn not set",
 			setup: func(s *DuckLakeSink, _ *fakeDB, _ *fakeArrowViewManager, _ *int) {
-				s.buildArrowDataFn = nil
+				s.buildArrowDataListFn = nil
 			},
-			data:           map[string]any{"t": int64(20)},
+			data:           []map[string]any{{"t": int64(20)}, {"t": int64(40)}},
 			wantErr:        "function build arrow data not set",
 			wantBuildCalls: 0,
 			wantDBQueries:  nil,
@@ -1665,7 +1909,7 @@ func TestCollectList(t *testing.T) {
 				tt.setup(s, fdb, fav, buildCalls)
 			}
 
-			err := s.Collect(ctx, testTuple{m: tt.data})
+			err := s.CollectList(ctx, testTupleList{ms: tt.data})
 
 			if tt.wantErr != "" {
 				require.Error(t, err)
@@ -1673,6 +1917,10 @@ func TestCollectList(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
+
+			// if tt.wantLogContains != "" {
+			// 	require.Contains(t, fl.errorf, tt.wantLogContains)
+			// }
 
 			require.Equal(t, tt.wantBuildCalls, *buildCalls)
 			require.Equal(t, tt.wantDBQueries, fdb.queries)
@@ -1719,133 +1967,3 @@ func TestToInt64(t *testing.T) {
 		})
 	}
 }
-
-// func TestInternalCollect_HappyPath(t *testing.T) {
-// 	ctx := mockContext.NewMockContext("collect_ok", "op")
-//
-// 	fdb := &fakeDB{}
-// 	buildCalls := 0
-// 	fakeBuildArrowDataFn := func(got map[string]any) (arrow.RecordBatch, error) {
-// 		buildCalls++
-// 		arrowData, err := buildArrowData(got)
-// 		if err != nil {
-// 			return nil, err
-// 		}
-// 		return arrowData, nil
-// 	}
-// 	fakeArrowViewMgr := &fakeArrowViewManager{}
-// 	s := &DuckLakeSink{
-// 		db:               fdb,
-// 		buildArrowDataFn: fakeBuildArrowDataFn,
-// 		arrowViewMgr:     fakeArrowViewMgr,
-// 	}
-//
-// 	conf := map[string]any{
-// 		"table": "table",
-// 	}
-// 	s.Provision(ctx, conf)
-//
-// 	data := map[string]any{"t": 20}
-//
-// 	err := s.collect(ctx, data)
-// 	require.NoError(t, err)
-//
-// 	require.Equal(t, 1, buildCalls)
-// 	require.Equal(t, 1, len(fdb.queries))
-// 	require.Equal(t, []string{"INSERT INTO table SELECT * FROM __ekuiper_ducklake_1"}, fdb.queries)
-// 	require.Equal(t, "__ekuiper_ducklake_1", fakeArrowViewMgr.lastName)
-// 	require.Equal(t, true, fakeArrowViewMgr.released)
-// }
-
-// func TestInternalCollect_ReturnsErrorIfNotPresent(t *testing.T) {
-// 	ctx := mockContext.NewMockContext("collect_not_present", "op")
-//
-// 	s := newCollectSink(nil)
-//
-// 	data := map[string]any{"temperature": 20}
-// 	err := s.collect(ctx, data)
-// 	require.ErrorContains(t, err, "client not selected")
-// }
-//
-// func TestInternalCollect_PropagatesWritePointsErrorAsIOError(t *testing.T) {
-// 	timex.Set(10)
-// 	ctx := mockContext.NewMockContext("collect_write_err", "op")
-//
-// 	fc := &fakeInflux3Client{writeErr: errors.New("boom")}
-// 	s := newCollectSink(fc)
-//
-// 	data := map[string]any{"temperature": 20}
-// 	err := s.collect(ctx, data)
-// 	require.Error(t, err)
-// 	require.True(t, errorx.IsIOError(err))
-// 	require.Contains(t, err.Error(), "boom")
-// }
-//
-// func TestInternalCollect_TransformPointsError_DoesNotWrite(t *testing.T) {
-// 	ctx := mockContext.NewMockContext("collect_transform_err", "op")
-//
-// 	fc := &fakeInflux3Client{}
-// 	s := newCollectSink(fc)
-//
-// 	err := s.collect(ctx, []byte{1, 2, 3})
-// 	require.Error(t, err)
-// 	require.Equal(t, "sink needs map or []map, but receive unsupported data [1 2 3]", err.Error())
-// 	require.Equal(t, 0, fc.writeCalls)
-// }
-//
-// func TestCollect(t *testing.T) {
-// 	timex.Set(10)
-// 	ctx := mockContext.NewMockContext("collect_ok", "op")
-//
-// 	fc := &fakeInflux3Client{}
-// 	s := newCollectSink(fc)
-//
-// 	item := testTuple{m: map[string]any{"t": 20}}
-// 	wantsPt := []*influxdb3.Point{
-// 		influxdb3.NewPoint("m",
-// 			map[string]string{"tag": "v"},
-// 			map[string]any{"t": 20},
-// 			time.UnixMilli(10),
-// 		),
-// 	}
-//
-// 	err := s.Collect(ctx, item)
-// 	require.NoError(t, err)
-//
-// 	require.Equal(t, 1, fc.writeCalls)
-// 	require.Len(t, fc.lastPoints, 1)
-// 	require.Equal(t, wantsPt[0].Values, fc.lastPoints[0].Values)
-// }
-//
-// func TestCollectList(t *testing.T) {
-// 	timex.Set(10)
-// 	ctx := mockContext.NewMockContext("collect_ok", "op")
-//
-// 	fc := &fakeInflux3Client{}
-// 	s := newCollectSink(fc)
-//
-// 	items := testTupleList{ms: []map[string]any{
-// 		{"t": 20},
-// 		{"t": 40},
-// 	}}
-// 	wantsPt := []*influxdb3.Point{
-// 		influxdb3.NewPoint("m",
-// 			map[string]string{"tag": "v"},
-// 			map[string]any{"t": 20},
-// 			time.UnixMilli(10),
-// 		),
-// 		influxdb3.NewPoint("m",
-// 			map[string]string{"tag": "v"},
-// 			map[string]any{"t": 40},
-// 			time.UnixMilli(10),
-// 		),
-// 	}
-//
-// 	err := s.CollectList(ctx, items)
-// 	require.NoError(t, err)
-//
-// 	require.Equal(t, 1, fc.writeCalls)
-// 	require.Len(t, fc.lastPoints, 2)
-// 	require.Equal(t, wantsPt[0].Values, fc.lastPoints[0].Values)
-// 	require.Equal(t, wantsPt[1].Values, fc.lastPoints[1].Values)
-// }

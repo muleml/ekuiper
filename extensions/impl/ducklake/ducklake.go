@@ -57,11 +57,12 @@ type c struct {
 }
 
 type DuckLakeSink struct {
-	conf             c
-	db               sqlEngine
-	arrowViewMgr     arrowViewManager
-	buildArrowDataFn func(map[string]any) (arrow.RecordBatch, error)
-	viewSeq          uint64
+	conf                 c
+	db                   sqlEngine
+	arrowViewMgr         arrowViewManager
+	buildArrowDataFn     func(api.StreamContext, map[string]any) (arrow.RecordBatch, error)
+	buildArrowDataListFn func(api.StreamContext, []map[string]any) (arrow.RecordBatch, error)
+	viewSeq              uint64
 }
 
 func (d *DuckLakeSink) Provision(ctx api.StreamContext, props map[string]any) error {
@@ -245,12 +246,35 @@ func (d *DuckLakeSink) Ping(ctx api.StreamContext, props map[string]any) error {
 func (d *DuckLakeSink) Collect(ctx api.StreamContext, item api.MessageTuple) error {
 	data := item.ToMap()
 	err := d.checkMethodsAreSet()
+	if d.buildArrowDataFn == nil {
+		return fmt.Errorf("function build arrow data not set")
+	}
 	if err != nil {
 		return fmt.Errorf("Ducklake sink collect error: %s", err)
 	}
-	arrowData, err := d.buildArrowDataFn(data)
+	arrowData, err := d.buildArrowDataFn(ctx, data)
 	if err != nil {
 		return fmt.Errorf("Ducklake sink collect error - arrow build failed: %s", err)
+	}
+	defer arrowData.Release()
+	return d.insertRecordBatch(ctx, arrowData)
+}
+
+func (d *DuckLakeSink) CollectList(ctx api.StreamContext, items api.MessageTupleList) error {
+	data := items.ToMaps()
+	err := d.checkMethodsAreSet()
+	if d.buildArrowDataListFn == nil {
+		return fmt.Errorf("function build arrow data not set")
+	}
+	if err != nil {
+		return fmt.Errorf("Ducklake sink collect error: %s", err)
+	}
+	arrowData, err := d.buildArrowDataListFn(ctx, data)
+	if err != nil {
+		return fmt.Errorf("Ducklake sink collect error - arrow build failed: %s", err)
+	}
+	if arrowData == nil {
+		return nil
 	}
 	defer arrowData.Release()
 	return d.insertRecordBatch(ctx, arrowData)
@@ -278,9 +302,6 @@ func (d *DuckLakeSink) checkMethodsAreSet() error {
 	}
 	if d.arrowViewMgr == nil {
 		return fmt.Errorf("arrow view manager not set")
-	}
-	if d.buildArrowDataFn == nil {
-		return fmt.Errorf("function build arrow data not set")
 	}
 	return nil
 }
@@ -329,13 +350,13 @@ func getSecret(catalogType string) (string, error) {
 	}
 }
 
-func buildArrowData(data map[string]any) (arrow.RecordBatch, error) {
+func buildArrowData(ctx api.StreamContext, data map[string]any) (arrow.RecordBatch, error) {
 	if len(data) < 1 {
 		// ctx.GetLogger().Errorf("send to zmq error %v", err)
 		return nil, nil
 	}
 
-	arrowInferredSchema, err := inferArrowSchemaFromRow(data)
+	arrowInferredSchema, err := inferArrowSchemaFromRow(ctx, data)
 	if err != nil {
 		return nil, fmt.Errorf("Ducklake sink error creating arrow data: %s", err)
 	}
@@ -345,52 +366,55 @@ func buildArrowData(data map[string]any) (arrow.RecordBatch, error) {
 	rb := array.NewRecordBuilder(memory.DefaultAllocator, arrowInferredSchema.schema)
 	defer rb.Release()
 
-	if err := appendRow(rb, arrowInferredSchema, data, true); err != nil {
+	if err := appendRow(ctx, rb, arrowInferredSchema, data, 0, true); err != nil {
 		return nil, fmt.Errorf("Ducklake sink error creating arrow data: %s - ", err)
 	}
 	return rb.NewRecordBatch(), nil
 }
 
-func buildArrowDataList(data []map[string]any) (arrow.RecordBatch, error) {
+func buildArrowDataList(ctx api.StreamContext, data []map[string]any) (arrow.RecordBatch, error) {
 	if len(data) < 1 {
+		ctx.GetLogger().Errorf("Ducklake sink: empty data")
 		return nil, nil
 	}
 	if len(data[0]) == 0 {
+		ctx.GetLogger().Errorf("Ducklake sink: empty first row")
 		return nil, nil
 	}
 
-	arrowInferredSchema, err := inferArrowSchemaFromRow(data[0])
+	arrowInferredSchema, err := inferArrowSchemaFromRow(ctx, data[0])
 	if err != nil {
 		return nil, fmt.Errorf("Ducklake sink error creating arrow data: %s", err)
 	}
-	if arrowInferredSchema == nil {
-		return nil, nil
-	}
-	rb := array.NewRecordBuilder(memory.DefaultAllocator, arrowInferredSchema.schema)
-	defer rb.Release()
+	if arrowInferredSchema != nil {
+		rb := array.NewRecordBuilder(memory.DefaultAllocator, arrowInferredSchema.schema)
+		defer rb.Release()
 
-	for rowIdx, row := range data {
-		if err := appendRow(rb, arrowInferredSchema, row, true); err != nil {
-			return nil, fmt.Errorf("Ducklake sink error creating arrow data: %s - Row <%d>", err, rowIdx)
+		for rowIdx, row := range data {
+			if err := appendRow(ctx, rb, arrowInferredSchema, row, rowIdx, true); err != nil {
+				return nil, fmt.Errorf("Ducklake sink error creating arrow data: %s - Row <%d>", err, rowIdx)
+			}
 		}
+		return rb.NewRecordBatch(), nil
 	}
-	return rb.NewRecordBatch(), nil
+	return nil, nil
 }
 
-func inferArrowSchemaFromRow(row map[string]any) (*inferredSchema, error) {
+func inferArrowSchemaFromRow(ctx api.StreamContext, row map[string]any) (*inferredSchema, error) {
 	if len(row) == 0 {
-		return nil, fmt.Errorf("Row is empty")
+		return nil, fmt.Errorf("Ducklake sink: row is empty")
 	}
 
 	keys := make([]string, 0, len(row))
 	for k := range row {
 		if row[k] != nil {
-			// TODO: add log if row[k] is null
 			keys = append(keys, k)
+		} else {
+			ctx.GetLogger().Errorf("Ducklake sink: empty value inferring schema, field <b>", k)
 		}
 	}
 	if len(keys) == 0 {
-		// TODO: add log if no key has valid value
+		ctx.GetLogger().Errorf("Ducklake sink: empty inferred schema")
 		return nil, nil
 	}
 	sort.Strings(keys)
@@ -465,11 +489,12 @@ func appendValueToField(b array.Builder, dt arrow.DataType, v any) error {
 	return nil
 }
 
-func appendRow(rb *array.RecordBuilder, schema *inferredSchema, row map[string]any, allowNulls bool) error {
+func appendRow(ctx api.StreamContext, rb *array.RecordBuilder, schema *inferredSchema, row map[string]any, rowNum int, allowNulls bool) error {
 	for colIdx, k := range schema.keys {
 		v, ok := row[k]
 		if !ok || v == nil {
 			if allowNulls {
+				ctx.GetLogger().Errorf("Ducklake sink: empty value Row <%d> Field <%s>", rowNum, k)
 				rb.Field(colIdx).AppendNull()
 				continue
 			}

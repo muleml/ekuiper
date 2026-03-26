@@ -3,6 +3,7 @@ package ducklake
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"sort"
 	"strings"
@@ -12,19 +13,23 @@ import (
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/memory"
+
+	"github.com/duckdb/duckdb-go/v2"
 	"github.com/lf-edge/ekuiper/contract/v2/api"
 	"github.com/lf-edge/ekuiper/v2/pkg/cast"
 )
 
+// Interfaces
 type sqlEngine interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 	Close() error
 }
 
 type arrowManager interface {
-	RegisterRecordBatch(ctx context.Context, name string, batch arrow.RecordBatch) (release func(), err error)
+	RegisterRecordBatch(name string, batch arrow.RecordBatch) (release func(), err error)
 }
 
+// Ducklake sink
 type inferredSchema struct {
 	keys   []string
 	schema *arrow.Schema
@@ -49,8 +54,8 @@ type StorageConf struct {
 }
 
 type c struct {
-	Table       string `json:"table"`
-	quotedTable string
+	Table          string `json:"table"`
+	sanitizedTable string
 
 	Storage StorageConf
 	Catalog CatalogConf
@@ -79,12 +84,12 @@ func (d *DuckLakeSink) Provision(ctx api.StreamContext, props map[string]any) er
 	if d.conf.Table == "" {
 		return fmt.Errorf("error configuring ducklake sink: missing table name")
 	}
-	if err := validateIdentLoose(d.conf.Table); err != nil {
+	if err := validateSQLString(d.conf.Table); err != nil {
 		return fmt.Errorf("error configuring ducklake sink: invalid table name %s", d.conf.Table)
 	}
 	// input sanitizer
-	d.conf.quotedTable = strings.ReplaceAll(d.conf.Table, `"`, ``)
-	d.conf.quotedTable = strings.ReplaceAll(d.conf.quotedTable, ` `, ``)
+	d.conf.sanitizedTable = strings.ReplaceAll(d.conf.Table, `"`, ``)
+	d.conf.sanitizedTable = strings.ReplaceAll(d.conf.sanitizedTable, ` `, ``)
 
 	if err := cast.MapToStruct(props, &d.conf.Catalog); err != nil {
 		return fmt.Errorf("error configuring ducklake sink: %s", err)
@@ -280,12 +285,12 @@ func (d *DuckLakeSink) CollectList(ctx api.StreamContext, items api.MessageTuple
 func (d *DuckLakeSink) insertRecordBatch(ctx api.StreamContext, batch arrow.RecordBatch) error {
 	viewName := fmt.Sprintf("__ekuiper_ducklake_%d", atomic.AddUint64(&d.viewSeq, 1))
 
-	release, err := d.arrowMgr.RegisterRecordBatch(context.Background(), viewName, batch)
+	release, err := d.arrowMgr.RegisterRecordBatch(viewName, batch)
 	if err != nil {
 		return fmt.Errorf("Ducklake sink collect error - arrow register view failed: %s", err)
 	}
 	defer release()
-	query := fmt.Sprintf("INSERT INTO %s SELECT * FROM %s", d.conf.quotedTable, viewName)
+	query := fmt.Sprintf("INSERT INTO %s SELECT * FROM %s", d.conf.sanitizedTable, viewName)
 	_, err = d.db.ExecContext(ctx, query)
 	if err != nil {
 		return fmt.Errorf("Ducklake sink collect error - db query execution failed: %s", err)
@@ -304,7 +309,7 @@ func (d *DuckLakeSink) checkMethodsAreSet() error {
 		return fmt.Errorf("function build arrow data not set")
 	}
 	if d.buildArrowDataListFn == nil {
-		return fmt.Errorf("function build arrow data not set")
+		return fmt.Errorf("function build arrow data list not set")
 	}
 	return nil
 }
@@ -536,7 +541,7 @@ func toInt64(v any) (int64, error) {
 	}
 }
 
-func validateIdentLoose(s string) error {
+func validateSQLString(s string) error {
 	if s == "" {
 		return fmt.Errorf("identifier is empty")
 	}
@@ -550,4 +555,45 @@ func validateIdentLoose(s string) error {
 		}
 	}
 	return nil
+}
+
+// Arrow manager
+type arrowMgr struct {
+	arrow *duckdb.Arrow
+}
+
+func (a *arrowMgr) RegisterRecordBatch(name string, batch arrow.RecordBatch) (release func(), err error) {
+	rdr, err := array.NewRecordReader(batch.Schema(), []arrow.RecordBatch{batch})
+	if err != nil {
+		return nil, err
+	}
+	// duckdb.RegisterView takes ownership of rdr and will release it when the related release function is called
+	// to have deterministic control on the release we add one reference counter
+	rdr.Retain()
+
+	duckdbRelease, err := a.arrow.RegisterView(rdr, name)
+	if err != nil {
+		rdr.Release()
+		return nil, err
+	}
+	return func() {
+		duckdbRelease()
+		rdr.Release()
+	}, nil
+}
+
+func newArrowManager(conn *sql.Conn) (*arrowMgr, error) {
+	var a *duckdb.Arrow
+	if err := conn.Raw(func(dc any) error {
+		drvConn, ok := dc.(driver.Conn)
+		if !ok {
+			return fmt.Errorf("ducklake: unexpected driver conn type %T", dc)
+		}
+		var err error
+		a, err = duckdb.NewArrowFromConn(drvConn)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	return &arrowMgr{arrow: a}, nil
 }

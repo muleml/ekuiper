@@ -84,7 +84,7 @@ type fakeArrowViewManager struct {
 	registerErr error
 }
 
-func (f *fakeArrowViewManager) RegisterRecordBatch(_ context.Context, name string, batch arrow.RecordBatch) (func(), error) {
+func (f *fakeArrowViewManager) RegisterRecordBatch(name string, batch arrow.RecordBatch) (func(), error) {
 	f.calls++
 	f.lastName = name
 	if f.registerErr != nil {
@@ -158,8 +158,8 @@ func TestProvision_Config(t *testing.T) {
 					KeyId:    "test_id",
 					Secret:   "test_secret",
 				},
-				Table:       "table",
-				quotedTable: "table",
+				Table:          "table",
+				sanitizedTable: "table",
 			},
 		},
 		{
@@ -185,8 +185,8 @@ func TestProvision_Config(t *testing.T) {
 					KeyId:    "test_id",
 					Secret:   "test_secret",
 				},
-				Table:       "table",
-				quotedTable: "table",
+				Table:          "table",
+				sanitizedTable: "table",
 			},
 		},
 		{
@@ -225,8 +225,8 @@ func TestProvision_Config(t *testing.T) {
 					KeyId:    "test_id",
 					Secret:   "test_secret",
 				},
-				Table:       "table",
-				quotedTable: "table",
+				Table:          "table",
+				sanitizedTable: "table",
 			},
 		},
 		{
@@ -437,8 +437,8 @@ func TestProvision_Config(t *testing.T) {
 					Endpoint: "test-endpoint:9000",
 					Bucket:   "ducklake",
 				},
-				Table:       `my table "v1"`,
-				quotedTable: `mytablev1`,
+				Table:          `my table "v1"`,
+				sanitizedTable: `mytablev1`,
 			},
 		},
 		{
@@ -1709,7 +1709,7 @@ func TestCollectList(t *testing.T) {
 				s.buildArrowDataListFn = nil
 			},
 			data:           []map[string]any{{"t": int64(20)}, {"t": int64(40)}},
-			wantErr:        "function build arrow data not set",
+			wantErr:        "function build arrow data list not set",
 			wantBuildCalls: 0,
 			wantDBQueries:  nil,
 			wantViewCalls:  0,
@@ -1745,4 +1745,43 @@ func TestCollectList(t *testing.T) {
 			require.Equal(t, tt.wantReleased, fav.released)
 		})
 	}
+}
+
+func TestCollect_InMemoryDB(t *testing.T) {
+	ctx := mockContext.NewMockContext("collect in memory", "op")
+
+	db, err := sql.Open("duckdb", "")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	conn, err := db.Conn(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	db.ExecContext(ctx, "CREATE TABLE prova (a BIGINT, b FLOAT);")
+
+	arrowMgr, err := newArrowManager(conn)
+	require.NoError(t, err)
+
+	s := &DuckLakeSink{
+		db:                   conn,
+		arrowMgr:             arrowMgr,
+		buildArrowDataFn:     buildArrowData,
+		buildArrowDataListFn: buildArrowDataList,
+	}
+	s.conf.sanitizedTable = "prova"
+
+	data := testTuple{map[string]any{"a": int64(20), "b": float64(12.5)}}
+	err = s.Collect(ctx, data)
+	require.NoError(t, err)
+
+	var gota int64
+	var gotb float64
+
+	require.NoError(
+		t,
+		conn.QueryRowContext(ctx, "SELECT * FROM prova").Scan(&gota, &gotb),
+	)
+	require.Equal(t, int64(20), gota)
+	require.Equal(t, float64(12.5), gotb)
 }

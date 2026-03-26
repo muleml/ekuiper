@@ -21,7 +21,7 @@ type sqlEngine interface {
 	Close() error
 }
 
-type arrowViewManager interface {
+type arrowManager interface {
 	RegisterRecordBatch(ctx context.Context, name string, batch arrow.RecordBatch) (release func(), err error)
 }
 
@@ -59,7 +59,7 @@ type c struct {
 type DuckLakeSink struct {
 	conf                 c
 	db                   sqlEngine
-	arrowViewMgr         arrowViewManager
+	arrowMgr             arrowManager
 	buildArrowDataFn     func(api.StreamContext, map[string]any) (arrow.RecordBatch, error)
 	buildArrowDataListFn func(api.StreamContext, []map[string]any) (arrow.RecordBatch, error)
 	viewSeq              uint64
@@ -246,15 +246,15 @@ func (d *DuckLakeSink) Ping(ctx api.StreamContext, props map[string]any) error {
 func (d *DuckLakeSink) Collect(ctx api.StreamContext, item api.MessageTuple) error {
 	data := item.ToMap()
 	err := d.checkMethodsAreSet()
-	if d.buildArrowDataFn == nil {
-		return fmt.Errorf("function build arrow data not set")
-	}
 	if err != nil {
 		return fmt.Errorf("Ducklake sink collect error: %s", err)
 	}
 	arrowData, err := d.buildArrowDataFn(ctx, data)
 	if err != nil {
 		return fmt.Errorf("Ducklake sink collect error - arrow build failed: %s", err)
+	}
+	if arrowData == nil {
+		return nil
 	}
 	defer arrowData.Release()
 	return d.insertRecordBatch(ctx, arrowData)
@@ -263,9 +263,6 @@ func (d *DuckLakeSink) Collect(ctx api.StreamContext, item api.MessageTuple) err
 func (d *DuckLakeSink) CollectList(ctx api.StreamContext, items api.MessageTupleList) error {
 	data := items.ToMaps()
 	err := d.checkMethodsAreSet()
-	if d.buildArrowDataListFn == nil {
-		return fmt.Errorf("function build arrow data not set")
-	}
 	if err != nil {
 		return fmt.Errorf("Ducklake sink collect error: %s", err)
 	}
@@ -283,7 +280,7 @@ func (d *DuckLakeSink) CollectList(ctx api.StreamContext, items api.MessageTuple
 func (d *DuckLakeSink) insertRecordBatch(ctx api.StreamContext, batch arrow.RecordBatch) error {
 	viewName := fmt.Sprintf("__ekuiper_ducklake_%d", atomic.AddUint64(&d.viewSeq, 1))
 
-	release, err := d.arrowViewMgr.RegisterRecordBatch(context.Background(), viewName, batch)
+	release, err := d.arrowMgr.RegisterRecordBatch(context.Background(), viewName, batch)
 	if err != nil {
 		return fmt.Errorf("Ducklake sink collect error - arrow register view failed: %s", err)
 	}
@@ -300,8 +297,14 @@ func (d *DuckLakeSink) checkMethodsAreSet() error {
 	if d.db == nil {
 		return fmt.Errorf("db not set")
 	}
-	if d.arrowViewMgr == nil {
+	if d.arrowMgr == nil {
 		return fmt.Errorf("arrow view manager not set")
+	}
+	if d.buildArrowDataFn == nil {
+		return fmt.Errorf("function build arrow data not set")
+	}
+	if d.buildArrowDataListFn == nil {
+		return fmt.Errorf("function build arrow data not set")
 	}
 	return nil
 }

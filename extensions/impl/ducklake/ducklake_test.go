@@ -1178,11 +1178,15 @@ func TestCollect(t *testing.T) {
 		buildCalls := 0
 
 		d := &DuckLakeSink{
-			db:           fdb,
-			arrowViewMgr: fav,
+			db:       fdb,
+			arrowMgr: fav,
 			buildArrowDataFn: func(ctx api.StreamContext, got map[string]any) (arrow.RecordBatch, error) {
 				buildCalls++
 				return buildArrowData(ctx, got)
+			},
+			buildArrowDataListFn: func(ctx api.StreamContext, got []map[string]any) (arrow.RecordBatch, error) {
+				buildCalls++
+				return buildArrowDataList(ctx, got)
 			},
 		}
 		_ = d.Provision(ctx, map[string]any{"table": "table"})
@@ -1223,7 +1227,7 @@ func TestCollect(t *testing.T) {
 			wantReleased:   false,
 		},
 		{
-			name: "error: arrowViewMgr RegisterRecordBatch fails",
+			name: "error: arrowMgr RegisterRecordBatch fails",
 			setup: func(_ *DuckLakeSink, _ *fakeDB, fav *fakeArrowViewManager, _ *int) {
 				fav.registerErr = fmt.Errorf("error")
 			},
@@ -1260,9 +1264,9 @@ func TestCollect(t *testing.T) {
 			wantReleased:   false,
 		},
 		{
-			name: "error: arrowViewMgr not set",
+			name: "error: arrowMgr not set",
 			setup: func(s *DuckLakeSink, _ *fakeDB, _ *fakeArrowViewManager, _ *int) {
-				s.arrowViewMgr = nil
+				s.arrowMgr = nil
 			},
 			data:           map[string]any{"t": int64(20)},
 			wantErr:        "arrow view manager not set",
@@ -1281,6 +1285,12 @@ func TestCollect(t *testing.T) {
 			wantBuildCalls: 0,
 			wantDBQueries:  nil,
 			wantViewCalls:  0,
+			wantReleased:   false,
+		},
+		{
+			name:           "empty data",
+			data:           map[string]any{},
+			wantBuildCalls: 1,
 			wantReleased:   false,
 		},
 	}
@@ -1596,11 +1606,15 @@ func TestCollectList(t *testing.T) {
 		buildCalls := 0
 
 		d := &DuckLakeSink{
-			db:           fdb,
-			arrowViewMgr: fav,
+			db:       fdb,
+			arrowMgr: fav,
 			buildArrowDataListFn: func(ctx api.StreamContext, got []map[string]any) (arrow.RecordBatch, error) {
 				buildCalls++
 				return buildArrowDataList(ctx, got)
+			},
+			buildArrowDataFn: func(ctx api.StreamContext, got map[string]any) (arrow.RecordBatch, error) {
+				buildCalls++
+				return buildArrowData(ctx, got)
 			},
 		}
 		_ = d.Provision(ctx, map[string]any{"table": "table"})
@@ -1616,7 +1630,6 @@ func TestCollectList(t *testing.T) {
 		wantDBQueries  []string
 		wantViewCalls  int
 		wantReleased   bool
-		// wantLogContains string
 	}{
 		{
 			name:           "happy path",
@@ -1642,7 +1655,7 @@ func TestCollectList(t *testing.T) {
 			wantReleased:   false,
 		},
 		{
-			name: "error: arrowViewMgr RegisterRecordBatch fails",
+			name: "error: arrowMgr RegisterRecordBatch fails",
 			setup: func(_ *DuckLakeSink, _ *fakeDB, fav *fakeArrowViewManager, _ *int) {
 				fav.registerErr = fmt.Errorf("error")
 			},
@@ -1679,9 +1692,9 @@ func TestCollectList(t *testing.T) {
 			wantReleased:   false,
 		},
 		{
-			name: "error: arrowViewMgr not set",
+			name: "error: arrowMgr not set",
 			setup: func(s *DuckLakeSink, _ *fakeDB, _ *fakeArrowViewManager, _ *int) {
-				s.arrowViewMgr = nil
+				s.arrowMgr = nil
 			},
 			data:           []map[string]any{{"t": int64(20)}, {"t": int64(40)}},
 			wantErr:        "arrow view manager not set",
@@ -1702,6 +1715,12 @@ func TestCollectList(t *testing.T) {
 			wantViewCalls:  0,
 			wantReleased:   false,
 		},
+		{
+			name:           "empty data",
+			data:           []map[string]any{},
+			wantBuildCalls: 1,
+			wantReleased:   false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -1719,10 +1738,6 @@ func TestCollectList(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
-
-			// if tt.wantLogContains != "" {
-			// 	require.Contains(t, fl.errorf, tt.wantLogContains)
-			// }
 
 			require.Equal(t, tt.wantBuildCalls, *buildCalls)
 			require.Equal(t, tt.wantDBQueries, fdb.queries)

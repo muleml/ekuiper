@@ -410,7 +410,7 @@ func inferArrowSchemaFromRow(ctx api.StreamContext, row map[string]any) (*inferr
 		if row[k] != nil {
 			keys = append(keys, k)
 		} else {
-			ctx.GetLogger().Errorf("Ducklake sink: empty value inferring schema, field <b>", k)
+			ctx.GetLogger().Errorf("Ducklake sink: empty value inferring schema, field <%s>", k)
 		}
 	}
 	if len(keys) == 0 {

@@ -442,7 +442,7 @@ func TestProvision_Config(t *testing.T) {
 			},
 		},
 		{
-			name: "invalid table name",
+			name: "invalid table name: ;",
 			conf: map[string]any{
 				"storage": map[string]any{
 					"storage_type":     "s3",
@@ -450,6 +450,18 @@ func TestProvision_Config(t *testing.T) {
 					"storage_bucket":   "ducklake",
 				},
 				"table": `; DROP TABLES`,
+			},
+			errStr: "error configuring ducklake sink: invalid table name",
+		},
+		{
+			name: "invalid table name: newline",
+			conf: map[string]any{
+				"storage": map[string]any{
+					"storage_type":     "s3",
+					"storage_endpoint": "test-endpoint:9000",
+					"storage_bucket":   "ducklake",
+				},
+				"table": "t\tx",
 			},
 			errStr: "error configuring ducklake sink: invalid table name",
 		},
@@ -777,112 +789,6 @@ func TestClose(t *testing.T) {
 	})
 }
 
-// func TestPing(t *testing.T) {
-// 	ctx := mockContext.NewMockContext("ping", "op")
-//
-// 	t.Run("happy path", func(t *testing.T) {
-// 		fsv := &fakeStorageVerifier{}
-// 		fcv := &fakeCatalogVerifier{}
-// 		s := &DuckLakeSink{
-// 			storageVerifier: fsv,
-// 			catalogVerifier: fcv,
-// 		}
-// 		conf := map[string]any{
-// 			"catalog": map[string]any{
-// 				"catalog_type":     "postgres",
-// 				"catalog_host":     "postgres",
-// 				"catalog_port":     5432,
-// 				"catalog_database": "ducklake_catalog",
-// 				"catalog_user":     "user",
-// 				"catalog_password": "password",
-// 			},
-// 			"storage": map[string]any{
-// 				"storage_type":     "s3",
-// 				"storage_endpoint": "test-endpoint:9000",
-// 				"storage_bucket":   "ducklake",
-// 				"storage_key_id":   "test_id",
-// 				"storage_secret":   "test_secret",
-// 			},
-// 			"table": "table",
-// 		}
-// 		err := s.Ping(ctx, conf)
-// 		require.NoError(t, err)
-// 		require.Equal(t, 1, fsv.calls)
-// 		require.Equal(t, 1, fcv.calls)
-// 	})
-//
-// 	t.Run("error when provision fails", func(t *testing.T) {
-// 		s := &DuckLakeSink{}
-// 		props := map[string]any{}
-// 		err := s.Ping(ctx, props)
-// 		require.Error(t, err)
-// 		require.ErrorContains(t, err, "Ducklake sink ping provision error")
-// 	})
-//
-// 	t.Run("storage connection error", func(t *testing.T) {
-// 		fsv := &fakeStorageVerifier{strErr: "storage connection error"}
-// 		fcv := &fakeCatalogVerifier{}
-// 		s := &DuckLakeSink{
-// 			storageVerifier: fsv,
-// 			catalogVerifier: fcv,
-// 		}
-// 		conf := map[string]any{
-// 			"catalog": map[string]any{
-// 				"catalog_type":     "postgres",
-// 				"catalog_host":     "postgres",
-// 				"catalog_port":     5432,
-// 				"catalog_database": "ducklake_catalog",
-// 				"catalog_user":     "user",
-// 				"catalog_password": "password",
-// 			},
-// 			"storage": map[string]any{
-// 				"storage_type":     "s3",
-// 				"storage_endpoint": "test-endpoint:9000",
-// 				"storage_bucket":   "ducklake",
-// 				"storage_key_id":   "test_id",
-// 				"storage_secret":   "test_secret",
-// 			},
-// 			"table": "table",
-// 		}
-// 		err := s.Ping(ctx, conf)
-// 		require.Error(t, err)
-// 		require.ErrorContains(t, err, "Ducklake sink ping connection error")
-// 		require.ErrorContains(t, err, "storage connection error")
-// 		require.Equal(t, 1, fsv.calls)
-// 	})
-// 	t.Run("catalog connection error", func(t *testing.T) {
-// 		fsv := &fakeStorageVerifier{}
-// 		fcv := &fakeCatalogVerifier{strErr: "catalog connection error"}
-// 		s := &DuckLakeSink{
-// 			storageVerifier: fsv,
-// 			catalogVerifier: fcv,
-// 		}
-// 		conf := map[string]any{
-// 			"catalog": map[string]any{
-// 				"catalog_type":     "postgres",
-// 				"catalog_host":     "postgres",
-// 				"catalog_port":     5432,
-// 				"catalog_database": "ducklake_catalog",
-// 				"catalog_user":     "user",
-// 				"catalog_password": "password",
-// 			},
-// 			"storage": map[string]any{
-// 				"storage_type":     "s3",
-// 				"storage_endpoint": "test-endpoint:9000",
-// 				"storage_bucket":   "ducklake",
-// 				"storage_key_id":   "test_id",
-// 				"storage_secret":   "test_secret",
-// 			},
-// 			"table": "table",
-// 		}
-// 		err := s.Ping(ctx, conf)
-// 		require.Error(t, err)
-// 		require.ErrorContains(t, err, "Ducklake sink ping connection error")
-// 		require.ErrorContains(t, err, "catalog connection error")
-// 		require.Equal(t, 1, fcv.calls)
-// 	})
-// }
-
 func TestPing(t *testing.T) {
 	ctx := mockContext.NewMockContext("testconnect", "op")
 
@@ -1126,53 +1032,27 @@ func TestPing(t *testing.T) {
 	}
 }
 
-func TestValidateIdentLoose(t *testing.T) {
-	tests := []struct {
-		name    string
-		in      string
-		wantErr string
-	}{
-		{name: "empty", in: "", wantErr: "empty"},
-		{name: "semicolon", in: "t; drop table x", wantErr: "contains ';'"},
-		{name: "newline", in: "t\nx", wantErr: "control"},
-		{name: "tab", in: "t\tx", wantErr: "control"},
-		{name: "ok simple", in: "table_1"},
-		{name: "ok with space (will require quoting)", in: "my table"},
-		{name: "ok with quote (will be escaped)", in: `a"b`},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := validateIdentLoose(tt.in)
-			if tt.wantErr != "" {
-				require.Error(t, err)
-				require.ErrorContains(t, err, tt.wantErr)
-				return
-			}
-			require.NoError(t, err)
-		})
-	}
-}
-
 func TestBuildArrowData(t *testing.T) {
-	ctx, _ := newMockCtxWithFakeLogger("collect", "op")
+	ctx, fl := newMockCtxWithFakeLogger("collect", "op")
 
 	ts, _ := time.Parse(time.RFC3339, "2026-03-23T10:15:30.000+02:00")
 
 	tests := []struct {
-		name      string
-		data      map[string]any
-		wantErr   string
-		emptyData bool
-		wantRec   func(t *testing.T) arrow.RecordBatch
+		name            string
+		data            map[string]any
+		wantErr         string
+		emptyData       bool
+		wantRec         func(t *testing.T) arrow.RecordBatch
+		wantLogContains []string
 	}{
 		{
 			name: "happy path",
 			data: map[string]any{
-				"string":  "string",
-				"float":   1.25,
-				"integer": int64(20),
-				"boolean": true,
-				"time":    ts,
+				"string": "a", "float32": float32(1.25), "float64": float64(1.25),
+				"uint": uint(20), "uint8": uint8(20), "uint16": uint16(20),
+				"uint32": uint32(20), "uint64": uint64(20), "int": int(20),
+				"int8": int8(20), "int16": int16(20), "int32": int32(20),
+				"int64": int64(20), "boolean": true, "time": ts,
 			},
 			wantRec: func(t *testing.T) arrow.RecordBatch {
 				mem := memory.NewCheckedAllocator(memory.DefaultAllocator)
@@ -1180,10 +1060,20 @@ func TestBuildArrowData(t *testing.T) {
 
 				schema := arrow.NewSchema([]arrow.Field{
 					{Name: "boolean", Type: arrow.FixedWidthTypes.Boolean, Nullable: true},
-					{Name: "float", Type: arrow.PrimitiveTypes.Float64, Nullable: true},
-					{Name: "integer", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+					{Name: "float32", Type: arrow.PrimitiveTypes.Float64, Nullable: true},
+					{Name: "float64", Type: arrow.PrimitiveTypes.Float64, Nullable: true},
+					{Name: "int", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+					{Name: "int8", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+					{Name: "int16", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+					{Name: "int32", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+					{Name: "int64", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
 					{Name: "string", Type: arrow.BinaryTypes.String, Nullable: true},
 					{Name: "time", Type: arrow.FixedWidthTypes.Timestamp_ms, Nullable: true},
+					{Name: "uint", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+					{Name: "uint8", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+					{Name: "uint16", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+					{Name: "uint32", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+					{Name: "uint64", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
 				}, nil)
 
 				rb := array.NewRecordBuilder(mem, schema)
@@ -1191,9 +1081,19 @@ func TestBuildArrowData(t *testing.T) {
 
 				rb.Field(0).(*array.BooleanBuilder).Append(true)
 				rb.Field(1).(*array.Float64Builder).Append(1.25)
-				rb.Field(2).(*array.Int64Builder).Append(20)
-				rb.Field(3).(*array.StringBuilder).Append("string")
-				rb.Field(4).(*array.TimestampBuilder).Append(arrow.Timestamp(ts.UnixMilli()))
+				rb.Field(2).(*array.Float64Builder).Append(1.25)
+				rb.Field(3).(*array.Int64Builder).Append(20)
+				rb.Field(4).(*array.Int64Builder).Append(20)
+				rb.Field(5).(*array.Int64Builder).Append(20)
+				rb.Field(6).(*array.Int64Builder).Append(20)
+				rb.Field(7).(*array.Int64Builder).Append(20)
+				rb.Field(8).(*array.StringBuilder).Append("a")
+				rb.Field(9).(*array.TimestampBuilder).Append(arrow.Timestamp(ts.UnixMilli()))
+				rb.Field(10).(*array.Int64Builder).Append(20)
+				rb.Field(11).(*array.Int64Builder).Append(20)
+				rb.Field(12).(*array.Int64Builder).Append(20)
+				rb.Field(13).(*array.Int64Builder).Append(20)
+				rb.Field(14).(*array.Int64Builder).Append(20)
 
 				rec := rb.NewRecordBatch()
 				t.Cleanup(func() { rec.Release() })
@@ -1209,9 +1109,37 @@ func TestBuildArrowData(t *testing.T) {
 			name:      "nil value",
 			data:      map[string]any{"a": nil},
 			emptyData: true,
+			wantLogContains: []string{
+				"Ducklake sink: empty value inferring schema, field <a>",
+				"Ducklake sink: empty inferred schema",
+			},
+		},
+		{
+			name: "one nil value",
+			data: map[string]any{"a": 1, "b": nil},
+			wantRec: func(t *testing.T) arrow.RecordBatch {
+				mem := memory.NewCheckedAllocator(memory.DefaultAllocator)
+				t.Cleanup(func() { mem.AssertSize(t, 0) })
+
+				schema := arrow.NewSchema([]arrow.Field{
+					{Name: "a", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+				}, nil)
+
+				rb := array.NewRecordBuilder(mem, schema)
+				t.Cleanup(func() { rb.Release() })
+
+				rb.Field(0).(*array.Int64Builder).Append(1)
+				rec := rb.NewRecordBatch()
+				t.Cleanup(func() { rec.Release() })
+				return rec
+			},
+			wantLogContains: []string{
+				"Ducklake sink: empty value inferring schema, field <b>",
+			},
 		},
 	}
 	for _, tt := range tests {
+		fl.errorf = nil
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := buildArrowData(ctx, tt.data)
 
@@ -1220,6 +1148,10 @@ func TestBuildArrowData(t *testing.T) {
 				require.ErrorContains(t, err, tt.wantErr)
 				require.Nil(t, got)
 				return
+			}
+
+			if len(tt.wantLogContains) != 0 {
+				require.Equal(t, tt.wantLogContains, fl.errorf)
 			}
 
 			if tt.emptyData {
@@ -1377,160 +1309,6 @@ func TestCollect(t *testing.T) {
 	}
 }
 
-func TestInferArrowSchema(t *testing.T) {
-	ctx, fl := newMockCtxWithFakeLogger("inferArrowSchema", "op")
-	ts1, _ := time.Parse(time.RFC3339, "2026-03-23T10:15:30.000+02:00")
-	// ts2 := ts1.Add(2 * time.Second)
-
-	type tc struct {
-		name            string
-		row             map[string]any
-		wantErr         string
-		wantSchema      *arrow.Schema
-		wantNil         bool
-		wantLogContains []string
-	}
-
-	tests := []tc{
-		{
-			name: "happy path",
-			row:  map[string]any{"string": "a", "float": 1.25, "integer": int64(20), "boolean": true, "time": ts1},
-			wantSchema: arrow.NewSchema([]arrow.Field{
-				{Name: "boolean", Type: arrow.FixedWidthTypes.Boolean, Nullable: true},
-				{Name: "float", Type: arrow.PrimitiveTypes.Float64, Nullable: true},
-				{Name: "integer", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
-				{Name: "string", Type: arrow.BinaryTypes.String, Nullable: true},
-				{Name: "time", Type: arrow.FixedWidthTypes.Timestamp_ms, Nullable: true},
-			}, nil),
-		},
-		{
-			name: "float32 -> float64",
-			row:  map[string]any{"float": float32(1.25)},
-			wantSchema: arrow.NewSchema([]arrow.Field{
-				{Name: "float", Type: arrow.PrimitiveTypes.Float64, Nullable: true},
-			}, nil),
-		},
-		{
-			name: "float64 -> float64",
-			row:  map[string]any{"float": float64(1.25)},
-			wantSchema: arrow.NewSchema([]arrow.Field{
-				{Name: "float", Type: arrow.PrimitiveTypes.Float64, Nullable: true},
-			}, nil),
-		},
-
-		{
-			name: "uint -> int64",
-			row:  map[string]any{"integer": uint(1)},
-			wantSchema: arrow.NewSchema([]arrow.Field{
-				{Name: "integer", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
-			}, nil),
-		},
-		{
-			name: "uint8 -> int64",
-			row:  map[string]any{"integer": uint8(1)},
-			wantSchema: arrow.NewSchema([]arrow.Field{
-				{Name: "integer", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
-			}, nil),
-		},
-		{
-			name: "uint16 -> int64",
-			row:  map[string]any{"integer": uint16(1)},
-			wantSchema: arrow.NewSchema([]arrow.Field{
-				{Name: "integer", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
-			}, nil),
-		},
-		{
-			name: "uint32 -> int64",
-			row:  map[string]any{"integer": uint32(1)},
-			wantSchema: arrow.NewSchema([]arrow.Field{
-				{Name: "integer", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
-			}, nil),
-		},
-		{
-			name: "uint64 -> int64",
-			row:  map[string]any{"integer": uint64(1)},
-			wantSchema: arrow.NewSchema([]arrow.Field{
-				{Name: "integer", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
-			}, nil),
-		},
-		{
-			name: "int -> int64",
-			row:  map[string]any{"integer": int(1)},
-			wantSchema: arrow.NewSchema([]arrow.Field{
-				{Name: "integer", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
-			}, nil),
-		},
-		{
-			name: "int8 -> int64",
-			row:  map[string]any{"integer": int8(1)},
-			wantSchema: arrow.NewSchema([]arrow.Field{
-				{Name: "integer", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
-			}, nil),
-		},
-		{
-			name: "int16 -> int64",
-			row:  map[string]any{"integer": int16(1)},
-			wantSchema: arrow.NewSchema([]arrow.Field{
-				{Name: "integer", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
-			}, nil),
-		},
-		{
-			name: "int32 -> int64",
-			row:  map[string]any{"integer": int32(1)},
-			wantSchema: arrow.NewSchema([]arrow.Field{
-				{Name: "integer", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
-			}, nil),
-		},
-		{
-			name: "int64 -> int64",
-			row:  map[string]any{"integer": int64(1)},
-			wantSchema: arrow.NewSchema([]arrow.Field{
-				{Name: "integer", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
-			}, nil),
-		},
-		{
-			name:            "null arrow data: empty value first row",
-			row:             map[string]any{"t": nil},
-			wantNil:         true,
-			wantLogContains: []string{"empty inferred schema"},
-		},
-		{
-			name:    "null arrow data: empty row",
-			row:     nil,
-			wantErr: "Ducklake sink: row is empty",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			fl.errorf = nil
-			got, err := inferArrowSchemaFromRow(ctx, tt.row)
-
-			if tt.wantErr != "" {
-				require.Error(t, err)
-				require.ErrorContains(t, err, tt.wantErr)
-				require.Nil(t, got)
-				return
-			}
-
-			require.NoError(t, err)
-
-			if len(tt.wantLogContains) == 0 {
-				for _, want := range tt.wantLogContains {
-					require.Contains(t, fl.errorf, want)
-				}
-			}
-			if tt.wantNil {
-				require.Nil(t, got)
-				return
-			}
-
-			require.NotNil(t, got)
-			require.True(t, tt.wantSchema.Equal(got.schema))
-
-		})
-	}
-}
 func TestBuildArrowDataList(t *testing.T) {
 	ctx, fl := newMockCtxWithFakeLogger("buildArrowDataList", "op")
 	ts1, _ := time.Parse(time.RFC3339, "2026-03-23T10:15:30.000+02:00")
@@ -1547,20 +1325,42 @@ func TestBuildArrowDataList(t *testing.T) {
 
 	tests := []tc{
 		{
-			name: "happy path",
+			name: "happy path with type conversion",
 			rows: []map[string]any{
-				{"string": "a", "float": 1.25, "integer": int64(20), "boolean": true, "time": ts1},
-				{"string": "b", "float": 2.5, "integer": int64(40), "boolean": false, "time": ts2},
+				{
+					"string": "a", "float32": float32(1.25), "float64": float64(1.25),
+					"uint": uint(20), "uint8": uint8(20), "uint16": uint16(20),
+					"uint32": uint32(20), "uint64": uint64(20), "int": int(20),
+					"int8": int8(20), "int16": int16(20), "int32": int32(20),
+					"int64": int64(20), "boolean": true, "time": ts1,
+				},
+				{
+					"string": "b", "float32": float32(2.5), "float64": float64(2.5),
+					"uint": uint(40), "uint8": uint8(40), "uint16": uint16(40),
+					"uint32": uint32(40), "uint64": uint64(40), "int": int(40),
+					"int8": int8(40), "int16": int16(40), "int32": int32(40),
+					"int64": int64(40), "boolean": false, "time": ts2,
+				},
 			},
 			wantRec: func(t *testing.T) arrow.RecordBatch {
 				mem := memory.NewCheckedAllocator(memory.DefaultAllocator)
 				t.Cleanup(func() { mem.AssertSize(t, 0) })
 				schema := arrow.NewSchema([]arrow.Field{
 					{Name: "boolean", Type: arrow.FixedWidthTypes.Boolean, Nullable: true},
-					{Name: "float", Type: arrow.PrimitiveTypes.Float64, Nullable: true},
-					{Name: "integer", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+					{Name: "float32", Type: arrow.PrimitiveTypes.Float64, Nullable: true},
+					{Name: "float64", Type: arrow.PrimitiveTypes.Float64, Nullable: true},
+					{Name: "int", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+					{Name: "int8", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+					{Name: "int16", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+					{Name: "int32", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+					{Name: "int64", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
 					{Name: "string", Type: arrow.BinaryTypes.String, Nullable: true},
 					{Name: "time", Type: arrow.FixedWidthTypes.Timestamp_ms, Nullable: true},
+					{Name: "uint", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+					{Name: "uint8", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+					{Name: "uint16", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+					{Name: "uint32", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+					{Name: "uint64", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
 				}, nil)
 				rb := array.NewRecordBuilder(mem, schema)
 				t.Cleanup(rb.Release)
@@ -1568,42 +1368,36 @@ func TestBuildArrowDataList(t *testing.T) {
 				// row 1
 				rb.Field(0).(*array.BooleanBuilder).Append(true)
 				rb.Field(1).(*array.Float64Builder).Append(1.25)
-				rb.Field(2).(*array.Int64Builder).Append(20)
-				rb.Field(3).(*array.StringBuilder).Append("a")
-				rb.Field(4).(*array.TimestampBuilder).Append(arrow.Timestamp(ts1.UnixMilli()))
+				rb.Field(2).(*array.Float64Builder).Append(1.25)
+				rb.Field(3).(*array.Int64Builder).Append(20)
+				rb.Field(4).(*array.Int64Builder).Append(20)
+				rb.Field(5).(*array.Int64Builder).Append(20)
+				rb.Field(6).(*array.Int64Builder).Append(20)
+				rb.Field(7).(*array.Int64Builder).Append(20)
+				rb.Field(8).(*array.StringBuilder).Append("a")
+				rb.Field(9).(*array.TimestampBuilder).Append(arrow.Timestamp(ts1.UnixMilli()))
+				rb.Field(10).(*array.Int64Builder).Append(20)
+				rb.Field(11).(*array.Int64Builder).Append(20)
+				rb.Field(12).(*array.Int64Builder).Append(20)
+				rb.Field(13).(*array.Int64Builder).Append(20)
+				rb.Field(14).(*array.Int64Builder).Append(20)
 
 				// row 2
 				rb.Field(0).(*array.BooleanBuilder).Append(false)
 				rb.Field(1).(*array.Float64Builder).Append(2.5)
-				rb.Field(2).(*array.Int64Builder).Append(40)
-				rb.Field(3).(*array.StringBuilder).Append("b")
-				rb.Field(4).(*array.TimestampBuilder).Append(arrow.Timestamp(ts2.UnixMilli()))
-
-				rec := rb.NewRecordBatch()
-				t.Cleanup(rec.Release)
-				return rec
-			},
-		},
-		{
-			name: "float32 -> float64",
-			rows: []map[string]any{
-				{"float": float32(1.25)},
-				{"float": float32(2.5)},
-			},
-			wantRec: func(t *testing.T) arrow.RecordBatch {
-				mem := memory.NewCheckedAllocator(memory.DefaultAllocator)
-				t.Cleanup(func() { mem.AssertSize(t, 0) })
-				schema := arrow.NewSchema([]arrow.Field{
-					{Name: "float", Type: arrow.PrimitiveTypes.Float64, Nullable: true},
-				}, nil)
-				rb := array.NewRecordBuilder(mem, schema)
-				t.Cleanup(rb.Release)
-
-				// row 1
-				rb.Field(0).(*array.Float64Builder).Append(1.25)
-
-				// row 2
-				rb.Field(0).(*array.Float64Builder).Append(2.5)
+				rb.Field(2).(*array.Float64Builder).Append(2.5)
+				rb.Field(3).(*array.Int64Builder).Append(40)
+				rb.Field(4).(*array.Int64Builder).Append(40)
+				rb.Field(5).(*array.Int64Builder).Append(40)
+				rb.Field(6).(*array.Int64Builder).Append(40)
+				rb.Field(7).(*array.Int64Builder).Append(40)
+				rb.Field(8).(*array.StringBuilder).Append("b")
+				rb.Field(9).(*array.TimestampBuilder).Append(arrow.Timestamp(ts2.UnixMilli()))
+				rb.Field(10).(*array.Int64Builder).Append(40)
+				rb.Field(11).(*array.Int64Builder).Append(40)
+				rb.Field(12).(*array.Int64Builder).Append(40)
+				rb.Field(13).(*array.Int64Builder).Append(40)
+				rb.Field(14).(*array.Int64Builder).Append(40)
 
 				rec := rb.NewRecordBatch()
 				t.Cleanup(rec.Release)
@@ -1641,7 +1435,7 @@ func TestBuildArrowDataList(t *testing.T) {
 			},
 		},
 		{
-			name: "integer type mismatch vs first row",
+			name: "type mismatch vs first row: integer",
 			rows: []map[string]any{
 				{"integer": int64(1)},
 				{"integer": "string"},
@@ -1649,7 +1443,7 @@ func TestBuildArrowDataList(t *testing.T) {
 			wantErr: "type mismatch",
 		},
 		{
-			name: "float type mismatch vs first row",
+			name: "type mismatch vs first row: float",
 			rows: []map[string]any{
 				{"float": float64(1)},
 				{"float": "string"},
@@ -1657,7 +1451,7 @@ func TestBuildArrowDataList(t *testing.T) {
 			wantErr: "type mismatch",
 		},
 		{
-			name: "bool type mismatch vs first row",
+			name: "type mismatch vs first row: bool",
 			rows: []map[string]any{
 				{"bool": true},
 				{"bool": "string"},
@@ -1665,7 +1459,7 @@ func TestBuildArrowDataList(t *testing.T) {
 			wantErr: "type mismatch",
 		},
 		{
-			name: "string type mismatch vs first row",
+			name: "type mismatch vs first row: string",
 			rows: []map[string]any{
 				{"string": "string"},
 				{"string": true},
@@ -1673,7 +1467,7 @@ func TestBuildArrowDataList(t *testing.T) {
 			wantErr: "type mismatch",
 		},
 		{
-			name: "timestamp type mismatch vs first row",
+			name: "type mismatch vs first row: timestamp",
 			rows: []map[string]any{
 				{"time": ts1},
 				{"time": true},
@@ -1684,19 +1478,25 @@ func TestBuildArrowDataList(t *testing.T) {
 			name:            "null arrow data: empty data",
 			rows:            []map[string]any{},
 			wantNil:         true,
-			wantLogContains: []string{"empty data"},
+			wantLogContains: []string{"Ducklake sink: empty data"},
 		},
 		{
-			name:            "null arrow data: empty first row",
-			rows:            []map[string]any{{"a": nil}},
-			wantNil:         true,
-			wantLogContains: []string{"empty first row"},
+			name:    "null arrow data: empty first row",
+			rows:    []map[string]any{{"a": nil}},
+			wantNil: true,
+			wantLogContains: []string{
+				"Ducklake sink: empty value inferring schema, field <a>",
+				"Ducklake sink: empty inferred schema",
+			},
 		},
 		{
-			name:            "null arrow data: empty value first row",
-			rows:            []map[string]any{{"t": nil}, {"t": int64(40)}},
-			wantNil:         true,
-			wantLogContains: []string{"empty inferred schema"},
+			name:    "null arrow data: empty value first row",
+			rows:    []map[string]any{{"t": nil}, {"t": int64(40)}},
+			wantNil: true,
+			wantLogContains: []string{
+				"Ducklake sink: empty value inferring schema, field <t>",
+				"Ducklake sink: empty inferred schema",
+			},
 		},
 		{
 			name:    "null arrow data: empty value second row",
@@ -1721,7 +1521,9 @@ func TestBuildArrowDataList(t *testing.T) {
 				t.Cleanup(rec.Release)
 				return rec
 			},
-			wantLogContains: []string{"empty value Row <1> Field <t>"},
+			wantLogContains: []string{
+				"Ducklake sink: empty value Row <1> Field <t>",
+			},
 		},
 		{
 			name:    "null arrow data: empty value first row second field",
@@ -1746,7 +1548,9 @@ func TestBuildArrowDataList(t *testing.T) {
 				t.Cleanup(rec.Release)
 				return rec
 			},
-			wantLogContains: []string{"empty value inferring schema, field <b>"},
+			wantLogContains: []string{
+				"Ducklake sink: empty value inferring schema, field <b>",
+			},
 		},
 	}
 
@@ -1768,10 +1572,8 @@ func TestBuildArrowDataList(t *testing.T) {
 				require.Nil(t, got)
 			}
 
-			if len(tt.wantLogContains) == 0 {
-				for _, want := range tt.wantLogContains {
-					require.Contains(t, fl.errorf, want)
-				}
+			if len(tt.wantLogContains) != 0 {
+				require.Equal(t, tt.wantLogContains, fl.errorf)
 			}
 
 			if len(tt.wantLogContains) == 0 && !tt.wantNil {
@@ -1926,44 +1728,6 @@ func TestCollectList(t *testing.T) {
 			require.Equal(t, tt.wantDBQueries, fdb.queries)
 			require.Equal(t, tt.wantViewCalls, fav.calls)
 			require.Equal(t, tt.wantReleased, fav.released)
-		})
-	}
-}
-
-func TestToInt64(t *testing.T) {
-	tests := []struct {
-		name    string
-		in      any
-		want    int64
-		wantErr string
-	}{
-		{name: "int", in: int(42), want: 42},
-		{name: "int8", in: int8(42), want: 42},
-		{name: "int16", in: int16(42), want: 42},
-		{name: "int32", in: int32(42), want: 42},
-		{name: "int64", in: int64(42), want: 42},
-		{name: "uint", in: uint(42), want: 42},
-		{name: "uint8", in: uint8(42), want: 42},
-		{name: "uint16", in: uint16(42), want: 42},
-		{name: "uint32", in: uint32(42), want: 42},
-		{name: "uint64", in: uint64(42), want: 42},
-		{name: "float64 is error", in: float64(1.2), wantErr: "expected int"},
-		{name: "string is error", in: "1", wantErr: "expected int"},
-		{name: "bool is error", in: true, wantErr: "expected int"},
-		{name: "time is error", in: time.UnixMilli(0), wantErr: "expected int"},
-		{name: "nil is error", in: nil, wantErr: "expected int"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := toInt64(tt.in)
-			if tt.wantErr != "" {
-				require.Error(t, err)
-				require.ErrorContains(t, err, tt.wantErr)
-				return
-			}
-			require.NoError(t, err)
-			require.Equal(t, tt.want, got)
 		})
 	}
 }

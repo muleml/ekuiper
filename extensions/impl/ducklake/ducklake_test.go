@@ -1780,8 +1780,55 @@ func TestCollect_InMemoryDB(t *testing.T) {
 
 	require.NoError(
 		t,
-		conn.QueryRowContext(ctx, "SELECT * FROM prova").Scan(&gota, &gotb),
+		conn.QueryRowContext(ctx, "SELECT a, b FROM prova").Scan(&gota, &gotb),
 	)
 	require.Equal(t, int64(20), gota)
 	require.Equal(t, float64(12.5), gotb)
+}
+
+func TestCollectList_InMemoryDB(t *testing.T) {
+	ctx := mockContext.NewMockContext("collect in memory", "op")
+
+	db, err := sql.Open("duckdb", "")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	conn, err := db.Conn(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	db.ExecContext(ctx, "CREATE TABLE prova (a BIGINT, b FLOAT);")
+
+	arrowMgr, err := newArrowManager(conn)
+	require.NoError(t, err)
+
+	s := &DuckLakeSink{
+		db:                   conn,
+		arrowMgr:             arrowMgr,
+		buildArrowDataFn:     buildArrowData,
+		buildArrowDataListFn: buildArrowDataList,
+	}
+	s.conf.sanitizedTable = "prova"
+
+	data := testTupleList{
+		[]map[string]any{
+			{"a": int64(20), "b": float64(12.5)},
+			{"a": int64(40), "b": float64(24.5)},
+		},
+	}
+	err = s.CollectList(ctx, data)
+	require.NoError(t, err)
+
+	rows, err := conn.QueryContext(ctx, "SELECT a, b FROM prova ORDER BY a")
+	var gota []int64
+	var gotb []float64
+	for rows.Next() {
+		var vint int64
+		var vfloat float64
+		require.NoError(t, rows.Scan(&vint, &vfloat))
+		gota = append(gota, vint)
+		gotb = append(gotb, vfloat)
+	}
+	require.Equal(t, []int64{20, 40}, gota)
+	require.Equal(t, []float64{12.5, 24.5}, gotb)
 }

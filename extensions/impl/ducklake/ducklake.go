@@ -156,7 +156,7 @@ func (d *DuckLakeSink) Connect(ctx api.StreamContext, sch api.StatusChangeHandle
 		}
 	}
 
-	err := d.attachDucklake(ctx, d.conf.Storage, d.conf.Catalog)
+	err := d.attachDucklake(ctx)
 	if err != nil {
 		sch(api.ConnectionDisconnected, err.Error())
 		return fmt.Errorf("Ducklake sink connection error: %s", err)
@@ -193,63 +193,37 @@ func (d *DuckLakeSink) Close(ctx api.StreamContext) error {
 }
 
 func (d *DuckLakeSink) Ping(ctx api.StreamContext, props map[string]any) error {
-	err := d.attachDucklake(ctx, d.conf.Storage, d.conf.Catalog)
+	if d.db == nil {
+		err := d.setupDuckdb("")
+		if err != nil {
+			return err
+		}
+	}
+	if d.arrowMgr == nil && d.conn == nil {
+		err := d.setupArrowManager(ctx)
+		if err != nil {
+			_ = d.Close(ctx)
+			return err
+		}
+	}
+	err := d.attachDucklake(ctx)
 	if err != nil {
+		_ = d.Close(ctx)
 		return fmt.Errorf("Ducklake sink connection error: %s", err)
 	}
-	// query := "INSTALL ducklake;"
-	// _, err := d.conn.ExecContext(ctx, query)
-	// if err != nil {
-	// 	return fmt.Errorf("Ducklake sink ping connection error: %s", err)
-	// }
-	//
-	// if d.conf.Catalog.Type == "postgres" {
-	// 	query := "INSTALL postgres;"
-	// 	_, err = d.conn.ExecContext(ctx, query)
-	// 	if err != nil {
-	// 		return fmt.Errorf("Ducklake sink ping connection error: %s", err)
-	// 	}
-	// }
-	//
-	// query, _ = queryCreateStorageSecret(d.conf.Storage)
-	// _, err = d.conn.ExecContext(ctx, query)
-	// if err != nil {
-	// 	return fmt.Errorf("Ducklake sink ping connection error: %s", err)
-	// }
-	//
-	// query, _ = queryCreateCatalogSecret(d.conf.Catalog)
-	// if query != "" {
-	// 	_, err = d.conn.ExecContext(ctx, query)
-	// 	if err != nil {
-	// 		return fmt.Errorf("Ducklake sink ping connection error: %s", err)
-	// 	}
-	// }
-
-	// query, _ = queryAttachDucklake(d.conf.Storage, d.conf.Catalog.Type)
-	// _, err = d.conn.ExecContext(ctx, query)
-	// if err != nil {
-	// 	return fmt.Errorf("Ducklake sink ping connection error: %s", err)
-	// }
-	//
-	// query, _ = queryCreateSecretDucklake(d.conf.Storage, d.conf.Catalog.Type)
-	// _, err = d.conn.ExecContext(ctx, query)
-	// if err != nil {
-	// 	return fmt.Errorf("Ducklake sink ping connection error: %s", err)
-	// }
-	//
-	// query = "ATTACH 'ducklake:ducklake_secret' AS the_ducklake;"
-	// _, err = d.conn.ExecContext(ctx, query)
-	// if err != nil {
-	// 	return fmt.Errorf("Ducklake sink connection error: %s", err)
-	// }
-
 	query := "USE memory;"
 	_, err = d.conn.ExecContext(ctx, query)
 	if err != nil {
+		_ = d.Close(ctx)
 		return fmt.Errorf("Ducklake sink ping connection error: %s", err)
 	}
 	query = "DETACH the_ducklake;"
 	_, err = d.conn.ExecContext(ctx, query)
+	if err != nil {
+		_ = d.Close(ctx)
+		return fmt.Errorf("Ducklake sink ping connection error: %s", err)
+	}
+	err = d.Close(ctx)
 	if err != nil {
 		return fmt.Errorf("Ducklake sink ping connection error: %s", err)
 	}
@@ -354,7 +328,7 @@ func (d *DuckLakeSink) Info() model.SinkInfo {
 	return model.SinkInfo{HasBatch: true}
 }
 
-func (d *DuckLakeSink) attachDucklake(ctx context.Context, confStorage StorageConf, confCatalog CatalogConf) error {
+func (d *DuckLakeSink) attachDucklake(ctx context.Context) error {
 	query := "INSTALL ducklake;"
 	_, err := d.conn.ExecContext(ctx, query)
 	if err != nil {
@@ -417,17 +391,6 @@ func queryCreateCatalogSecret(conf CatalogConf) (string, error) {
 		return "", fmt.Errorf("error connecting ducklake sink: catalog type not supported")
 	}
 }
-
-// func queryAttachDucklake(conf StorageConf, catalogType string) (string, error) {
-// 	secret, _ := getDucklakeSecret(catalogType)
-// 	switch conf.Type {
-// 	case "s3":
-// 		query := fmt.Sprintf("%s; ATTACH 'ducklake:ducklake_secret' AS the_ducklake;", secret)
-// 		return query, nil
-// 	default:
-// 		return "", fmt.Errorf("error connecting ducklake sink: storage type not supported")
-// 	}
-// }
 
 func queryCreateSecretDucklake(conf StorageConf, catalogType string) (string, error) {
 	var metaDataPath string
@@ -695,4 +658,9 @@ func newArrowManager(conn *sql.Conn) (*arrowMgr, error) {
 }
 
 // Export sink
-// func
+func GetSink() api.Sink {
+	return &DuckLakeSink{
+		buildArrowDataFn:     buildArrowData,
+		buildArrowDataListFn: buildArrowDataList,
+	}
+}

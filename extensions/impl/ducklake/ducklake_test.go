@@ -1174,10 +1174,13 @@ func TestPing(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			conn := &fakeConn{errStr: tt.errStr, numCorrectQueries: tt.numCorrectQueries}
-			s := &DuckLakeSink{conn: conn}
+			db := &fakeDB{}
+			s := &DuckLakeSink{db: db, conn: conn}
 			err := s.Provision(ctx, tt.conf)
 			require.NoError(t, err)
 			err = s.Ping(ctx, tt.conf)
+			require.Equal(t, 1, db.closeCalls)
+			require.Equal(t, 1, conn.closeCalls)
 			if tt.errStr != "" {
 				require.Error(t, err)
 				require.ErrorContains(t, err, tt.errStr)

@@ -534,7 +534,6 @@ func TestConnect(t *testing.T) {
 				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000');",
 				"CREATE OR REPLACE SECRET ducklake_secret (TYPE ducklake, METADATA_PATH 'metadata.duckdb', DATA_PATH 's3://ducklake', METADATA_PARAMETERS MAP {});",
 				"ATTACH 'ducklake:ducklake_secret' AS the_ducklake;",
-				"USE the_ducklake;",
 			},
 			useFakeConn: true,
 		},
@@ -558,7 +557,6 @@ func TestConnect(t *testing.T) {
 				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000');",
 				"CREATE OR REPLACE SECRET ducklake_secret (TYPE ducklake, METADATA_PATH 'metadata.duckdb', DATA_PATH 's3://ducklake', METADATA_PARAMETERS MAP {});",
 				"ATTACH 'ducklake:ducklake_secret' AS the_ducklake;",
-				"USE the_ducklake;",
 			},
 			useFakeConn: true,
 		},
@@ -589,7 +587,6 @@ func TestConnect(t *testing.T) {
 				"CREATE OR REPLACE SECRET postgres_secret (TYPE postgres, HOST 'postgres', PORT 5432, DATABASE ducklake_catalog, USER 'user', PASSWORD 'password');",
 				"CREATE OR REPLACE SECRET ducklake_secret (TYPE ducklake, METADATA_PATH '', DATA_PATH 's3://ducklake', METADATA_PARAMETERS MAP {'TYPE': 'postgres', 'SECRET': 'postgres_secret'});",
 				"ATTACH 'ducklake:ducklake_secret' AS the_ducklake;",
-				"USE the_ducklake;",
 			},
 			useFakeConn: true,
 		},
@@ -768,39 +765,6 @@ func TestConnect(t *testing.T) {
 			},
 			errStr:            "Ducklake sink connection error",
 			numCorrectQueries: 6,
-			useFakeConn:       true,
-		},
-		{
-			name: "error use ducklake",
-			conf: map[string]any{
-				"catalog": map[string]any{
-					"catalog_type":     "postgres",
-					"catalog_host":     "postgres",
-					"catalog_port":     5432,
-					"catalog_database": "ducklake_catalog",
-					"catalog_user":     "user",
-					"catalog_password": "password",
-				},
-				"storage": map[string]any{
-					"storage_type":     "s3",
-					"storage_endpoint": "test-endpoint:9000",
-					"storage_bucket":   "ducklake",
-					"storage_key_id":   "test_id",
-					"storage_secret":   "test_secret",
-				},
-				"table": "table",
-			},
-			expected: []string{
-				"INSTALL ducklake;",
-				"INSTALL postgres;",
-				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000');",
-				"CREATE OR REPLACE SECRET postgres_secret (TYPE postgres, HOST 'postgres', PORT 5432, DATABASE ducklake_catalog, USER 'user', PASSWORD 'password');",
-				"CREATE OR REPLACE SECRET ducklake_secret (TYPE ducklake, METADATA_PATH '', DATA_PATH 's3://ducklake', METADATA_PARAMETERS MAP {'TYPE': 'postgres', 'SECRET': 'postgres_secret'});",
-				"ATTACH 'ducklake:ducklake_secret' AS the_ducklake;",
-				"USE the_ducklake;",
-			},
-			errStr:            "Ducklake sink connection error",
-			numCorrectQueries: 7,
 			useFakeConn:       true,
 		},
 		{
@@ -1351,6 +1315,7 @@ func TestCollect(t *testing.T) {
 				buildCalls++
 				return buildArrowDataList(ctx, got)
 			},
+			ducklakeName: "the_ducklake",
 		}
 		_ = d.Provision(ctx, map[string]any{"table": "table"})
 		return d, fconn, fav, &buildCalls
@@ -1368,9 +1333,9 @@ func TestCollect(t *testing.T) {
 	}{
 		{
 			name:           "happy path",
-			data:           map[string]any{"t": int64(20)},
+			data:           map[string]any{"t": int64(20), "u": float64(13.5)},
 			wantBuildCalls: 1,
-			wantDBQueries:  []string{"INSERT INTO table SELECT * FROM __ekuiper_ducklake_1"},
+			wantDBQueries:  []string{"INSERT INTO the_ducklake.table (t, u) SELECT t, u FROM __ekuiper_ducklake_1;"},
 			wantViewCalls:  1,
 			wantReleased:   true,
 		},
@@ -1410,7 +1375,7 @@ func TestCollect(t *testing.T) {
 			data:           map[string]any{"t": int64(20)},
 			wantErr:        "db query execution failed",
 			wantBuildCalls: 1,
-			wantDBQueries:  []string{"INSERT INTO table SELECT * FROM __ekuiper_ducklake_1"},
+			wantDBQueries:  []string{"INSERT INTO the_ducklake.table (t) SELECT t FROM __ekuiper_ducklake_1;"},
 			wantViewCalls:  1,
 			wantReleased:   true,
 		},
@@ -1779,6 +1744,7 @@ func TestCollectList(t *testing.T) {
 				buildCalls++
 				return buildArrowData(ctx, got)
 			},
+			ducklakeName: "the_ducklake",
 		}
 		_ = d.Provision(ctx, map[string]any{"table": "table"})
 		return d, fconn, fav, &buildCalls
@@ -1796,9 +1762,9 @@ func TestCollectList(t *testing.T) {
 	}{
 		{
 			name:           "happy path",
-			data:           []map[string]any{{"t": int64(20)}, {"t": int64(40)}},
+			data:           []map[string]any{{"t": int64(20), "u": float64(13.5)}, {"t": int64(40), "u": float64(26.5)}},
 			wantBuildCalls: 1,
-			wantDBQueries:  []string{"INSERT INTO table SELECT * FROM __ekuiper_ducklake_1"},
+			wantDBQueries:  []string{"INSERT INTO the_ducklake.table (t, u) SELECT t, u FROM __ekuiper_ducklake_1;"},
 			wantViewCalls:  1,
 			wantReleased:   true,
 		},
@@ -1838,7 +1804,7 @@ func TestCollectList(t *testing.T) {
 			data:           []map[string]any{{"t": int64(20)}, {"t": int64(40)}},
 			wantErr:        "db query execution failed",
 			wantBuildCalls: 1,
-			wantDBQueries:  []string{"INSERT INTO table SELECT * FROM __ekuiper_ducklake_1"},
+			wantDBQueries:  []string{"INSERT INTO the_ducklake.table (t) SELECT t FROM __ekuiper_ducklake_1;"},
 			wantViewCalls:  1,
 			wantReleased:   true,
 		},
@@ -1931,6 +1897,7 @@ func TestCollect_InMemoryDB(t *testing.T) {
 		arrowMgr:             arrowMgr,
 		buildArrowDataFn:     buildArrowData,
 		buildArrowDataListFn: buildArrowDataList,
+		ducklakeName:         "memory",
 	}
 	s.conf.sanitizedTable = "prova"
 
@@ -1970,6 +1937,7 @@ func TestCollectList_InMemoryDB(t *testing.T) {
 		arrowMgr:             arrowMgr,
 		buildArrowDataFn:     buildArrowData,
 		buildArrowDataListFn: buildArrowDataList,
+		ducklakeName:         "memory",
 	}
 	s.conf.sanitizedTable = "prova"
 

@@ -75,6 +75,7 @@ type DuckLakeSink struct {
 	buildArrowDataFn     func(api.StreamContext, map[string]any) (arrow.RecordBatch, error)
 	buildArrowDataListFn func(api.StreamContext, []map[string]any) (arrow.RecordBatch, error)
 	viewSeq              uint64
+	ducklakeName         string
 }
 
 func (d *DuckLakeSink) Provision(ctx api.StreamContext, props map[string]any) error {
@@ -135,6 +136,8 @@ func (d *DuckLakeSink) Provision(ctx api.StreamContext, props map[string]any) er
 		return fmt.Errorf("error configuring ducklake sink: storage type not supported")
 	}
 
+	d.ducklakeName = "the_ducklake"
+
 	ctx.GetLogger().Infof("ducklake sink provision successfully terminated")
 
 	return nil
@@ -157,13 +160,6 @@ func (d *DuckLakeSink) Connect(ctx api.StreamContext, sch api.StatusChangeHandle
 	}
 
 	err := d.attachDucklake(ctx)
-	if err != nil {
-		sch(api.ConnectionDisconnected, err.Error())
-		return fmt.Errorf("Ducklake sink connection error: %s", err)
-	}
-
-	query := "USE the_ducklake;"
-	_, err = d.conn.ExecContext(ctx, query)
 	if err != nil {
 		sch(api.ConnectionDisconnected, err.Error())
 		return fmt.Errorf("Ducklake sink connection error: %s", err)
@@ -274,12 +270,30 @@ func (d *DuckLakeSink) insertRecordBatch(ctx api.StreamContext, batch arrow.Reco
 		return fmt.Errorf("Ducklake sink collect error - arrow register view failed: %s", err)
 	}
 	defer release()
-	query := fmt.Sprintf("INSERT INTO %s SELECT * FROM %s", d.conf.sanitizedTable, viewName)
+	query, err := d.getInsertQuery(batch.Schema(), viewName)
+	if err != nil {
+		return fmt.Errorf("Ducklake sink collect error - db query creation failed: %s", err)
+	}
 	_, err = d.conn.ExecContext(ctx, query)
 	if err != nil {
 		return fmt.Errorf("Ducklake sink collect error - db query execution failed: %s", err)
 	}
 	return nil
+}
+
+func (d *DuckLakeSink) getInsertQuery(schema *arrow.Schema, viewName string) (string, error) {
+	if len(schema.Fields()) == 0 {
+		return "", fmt.Errorf("empty arrow schema")
+	}
+	columns := ""
+	for i, field := range schema.Fields() {
+		if i > 0 {
+			columns += ", "
+		}
+		columns += field.Name
+	}
+	query := fmt.Sprintf("INSERT INTO %s.%s (%s) SELECT %s FROM %s;", d.ducklakeName, d.conf.sanitizedTable, columns, columns, viewName)
+	return query, nil
 }
 
 func (d *DuckLakeSink) checkSetup() error {
@@ -363,13 +377,14 @@ func (d *DuckLakeSink) attachDucklake(ctx context.Context) error {
 		return err
 	}
 
-	query = "ATTACH 'ducklake:ducklake_secret' AS the_ducklake;"
+	query = fmt.Sprintf("ATTACH 'ducklake:ducklake_secret' AS %s;", d.ducklakeName)
 	_, err = d.conn.ExecContext(ctx, query)
 	if err != nil {
 		return err
 	}
 	return nil
 }
+
 func queryCreateStorageSecret(conf StorageConf) (string, error) {
 	switch conf.Type {
 	case "s3":

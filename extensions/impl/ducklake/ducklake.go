@@ -66,6 +66,7 @@ type c struct {
 	sanitizedTable string
 	viewSeq        uint64
 	ducklakeName   string
+	Fields         []string `json:"fields"`
 
 	Storage StorageConf
 	Catalog CatalogConf
@@ -283,18 +284,33 @@ func (d *DuckLakeSink) insertRecordBatch(ctx api.StreamContext, batch arrow.Reco
 }
 
 func (d *DuckLakeSink) getInsertQuery(schema *arrow.Schema, viewName string) (string, error) {
-	if len(schema.Fields()) == 0 {
-		return "", fmt.Errorf("empty arrow schema")
+	fields, err := d.getFields(schema)
+	if err != nil {
+		return "", err
 	}
 	columns := ""
-	for i, field := range schema.Fields() {
+	for i, field := range fields {
 		if i > 0 {
 			columns += ", "
 		}
-		columns += field.Name
+		columns += field
 	}
 	query := fmt.Sprintf("INSERT INTO %s.%s (%s) SELECT %s FROM %s;", d.conf.ducklakeName, d.conf.sanitizedTable, columns, columns, viewName)
 	return query, nil
+}
+
+func (d *DuckLakeSink) getFields(schema *arrow.Schema) ([]string, error) {
+	if len(d.conf.Fields) > 0 {
+		return d.conf.Fields, nil
+	}
+	if len(schema.Fields()) == 0 {
+		return nil, fmt.Errorf("empty arrow schema")
+	}
+	var fields []string
+	for _, field := range schema.Fields() {
+		fields = append(fields, field.Name)
+	}
+	return fields, nil
 }
 
 func (d *DuckLakeSink) checkSetup() error {

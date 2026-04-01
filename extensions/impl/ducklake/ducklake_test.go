@@ -1512,7 +1512,9 @@ func TestCollect(t *testing.T) {
 			if tt.setup != nil {
 				tt.setup(s, fconn, fav, buildCalls)
 			}
-
+			if len(tt.fields) > 0 {
+				s.conf.Fields = tt.fields
+			}
 			err := s.Collect(ctx, testTuple{m: tt.data})
 
 			if tt.wantErr != "" {
@@ -1952,6 +1954,9 @@ func TestCollectList(t *testing.T) {
 			s, fconn, fav, buildCalls := makeSink()
 			if tt.setup != nil {
 				tt.setup(s, fconn, fav, buildCalls)
+			}
+			if len(tt.fields) > 0 {
+				s.conf.Fields = tt.fields
 			}
 
 			err := s.CollectList(ctx, testTupleList{ms: tt.data})

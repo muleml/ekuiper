@@ -37,6 +37,21 @@
       }
     },
     {
+      "name": "fields",
+      "default": [],
+      "optional": true,
+      "control": "list",
+      "type": "list_string",
+      "hint": {
+        "en_US": "Fields written to the ducklake",
+        "zh_CN": "寫給鴨湖的田野"
+      },
+      "label": {
+        "en_US": "Fields",
+        "zh_CN": "田野"
+      }
+    },
+    {
       "name": "metadata_path",
       "default": "metadata.duckdb",
       "optional": true,

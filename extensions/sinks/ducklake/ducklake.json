@@ -1,0 +1,284 @@
+{
+  "about": {
+    "trial": true,
+    "author": {
+      "name": "piepor",
+      "email": "",
+      "company": "",
+      "website": "https://github.com/piepor"
+    },
+    "helpUrl": {
+      "en_US": "https://ekuiper.org/docs/en/latest/guide/sinks/plugin/ducklake.html",
+      "zh_CN": "https://ekuiper.org/docs/zh/latest/guide/sinks/plugin/ducklake.html"
+    },
+    "description": {
+      "en_US": "This a sink plugin for Ducklake, it can be used for saving the analysis data into in a data lake using the Ducklake format.",
+      "zh_CN": "這是一個 Ducklake 的資料接收器插件，它可以用來將分析資料以 Ducklake 格式儲存到資料湖中。"
+    }
+  },
+  "libs": [
+    "github.com/apache/arrow-go/v18",
+    "github.com/duckdb/duckdb-go/v2"
+  ],
+  "properties": [
+    {
+      "name": "table",
+      "default": "",
+      "optional": false,
+      "control": "text",
+      "type": "string",
+      "hint": {
+        "en_US": "Target table name in the attached Ducklake",
+        "zh_CN": "附件中的 Ducklake 目標表名稱"
+      },
+      "label": {
+        "en_US": "Table name",
+        "zh_CN": "表名"
+      }
+    },
+    {
+      "name": "metadata_path",
+      "default": "metadata.duckdb",
+      "optional": true,
+      "control": "text",
+      "type": "string",
+      "hint": {
+        "en_US": "Ducklake metadata catalog path/DSN, default to duckdb.",
+        "zh_CN": "ducklake_secret 中使用的 Ducklake 元資料目錄路徑/DSN。預設為 duckdb。"
+      },
+      "label": {
+        "en_US": "Metadata path",
+        "zh_CN": "元資料路徑"
+      }
+    },
+    {
+      "name": "data_path",
+      "default": "",
+      "optional": false,
+      "control": "text",
+      "type": "string",
+      "hint": {
+        "en_US": "Ducklake data path, e.g. s3://minio",
+        "zh_CN": "Ducklake 資料路徑，例如 s3://minio"
+      },
+      "label": {
+        "en_US": "Data path",
+        "zh_CN": "數據路徑"
+      }
+    },
+    {
+      "name": "catalog_type",
+      "default": "duckdb",
+      "optional": false,
+      "control": "select",
+      "type": "string",
+      "values": [
+        "duckdb",
+        "postgres"
+      ],
+      "hint": {
+        "en_US": "Catalog type, default to duckdb.",
+        "zh_CN": "目錄類型，預設為 duckdb。"
+      },
+      "label": {
+        "en_US": "Catalog type",
+        "zh_CN": "目錄類型"
+      }
+    },
+    {
+      "name": "catalog_host",
+      "default": "",
+      "optional": true,
+      "control": "text",
+      "type": "string",
+      "hint": {
+        "en_US": "Database host, required with postgres catalog.",
+        "zh_CN": "資料庫主機，postgres 目錄必需。"
+      },
+      "label": {
+        "en_US": "Catalog host",
+        "zh_CN": "目錄主機"
+      }
+    },
+    {
+      "name": "catalog_port",
+      "default": 5432,
+      "optional": true,
+      "control": "text",
+      "type": "int",
+      "hint": {
+        "en_US": "Database port, required with postgres catalog.",
+        "zh_CN": "資料庫端口，PostgreSQL 目錄需要此端口。"
+      },
+      "label": {
+        "en_US": "Catalog port",
+        "zh_CN": "目錄連接埠"
+      }
+    },
+    {
+      "name": "catalog_database",
+      "default": "",
+      "optional": true,
+      "control": "text",
+      "type": "string",
+      "hint": {
+        "en_US": "Database name, required with postgres catalog.",
+        "zh_CN": "資料庫名稱（postgres 目錄必需）。"
+      },
+      "label": {
+        "en_US": "Catalog database name",
+        "zh_CN": "目錄資料庫名稱"
+      }
+    },
+    {
+      "name": "catalog_user",
+      "default": "",
+      "optional": true,
+      "control": "text",
+      "type": "string",
+      "hint": {
+        "en_US": "Database user, required with postgres catalog.",
+        "zh_CN": "資料庫用戶，需要postgres目錄。"
+      },
+      "label": {
+        "en_US": "Catalog database user",
+        "zh_CN": "目錄資料庫用戶"
+      }
+    },
+    {
+      "name": "catalog_password",
+      "default": "",
+      "optional": true,
+      "control": "text",
+      "type": "string",
+      "hint": {
+        "en_US": "Database password, required with postgres catalog.",
+        "zh_CN": "使用postgres目錄時需要資料庫密碼。"
+      },
+      "label": {
+        "en_US": "Catalog database password",
+        "zh_CN": "目錄資料庫密碼"
+      }
+    },
+    {
+      "name": "storage_type",
+      "default": "s3",
+      "optional": false,
+      "control": "select",
+      "type": "string",
+      "values": [
+        "s3"
+      ],
+      "hint": {
+        "en_US": "Storage type for the Ducklake format.",
+        "zh_CN": "Ducklake格式的儲存類型。"
+      },
+      "label": {
+        "en_US": "Storage type",
+        "zh_CN": "儲存類型"
+      }
+    },
+    {
+      "name": "storage_endpoint",
+      "default": "",
+      "optional": true,
+      "control": "text",
+      "type": "string",
+      "hint": {
+        "en_US": "S3 endpoint for the Ducklake storage, required with S3 storage.",
+        "zh_CN": "Ducklake 儲存的 S3 端點，使用 S3 儲存時需要。"
+      },
+      "label": {
+        "en_US": "S3 endpoint",
+        "zh_CN": "S3 端點"
+      }
+    },
+    {
+      "name": "storage_bucket",
+      "default": "",
+      "optional": true,
+      "control": "text",
+      "type": "string",
+      "hint": {
+        "en_US": "S3 bucket for the Ducklake storage, required with S3 storage.",
+        "zh_CN": "Ducklake 儲存所需的 S3 桶，S3 儲存系統必需。"
+      },
+      "label": {
+        "en_US": "S3 bucket",
+        "zh_CN": "S3 bucket"
+      }
+    },
+    {
+      "name": "storage_key_id",
+      "default": "",
+      "optional": true,
+      "control": "text",
+      "type": "string",
+      "hint": {
+        "en_US": "S3 access key id.",
+        "zh_CN": "S3 存取密鑰 ID。"
+      },
+      "label": {
+        "en_US": "S3 access key id",
+        "zh_CN": "S3 存取密鑰 ID。"
+      }
+    },
+    {
+      "name": "storage_secret",
+      "default": "",
+      "optional": true,
+      "control": "text",
+      "type": "string",
+      "hint": {
+        "en_US": "S3 secret token for authentication.",
+        "zh_CN": "用於身份驗證的S3密鑰令牌。"
+      },
+      "label": {
+        "en_US": "S3 secret",
+        "zh_CN": "S3秘密"
+      }
+    },
+    {
+      "name": "storage_use_ssl",
+      "default": false,
+      "optional": true,
+      "control": "radio",
+      "type": "bool",
+      "hint": {
+        "en_US": "Whether to use ssl when communicating with the S3 storage.",
+        "zh_CN": "與 S3 儲存通訊時是否使用 SSL。"
+      },
+      "label": {
+        "en_US": "S3 use ssl",
+        "zh_CN": "S3 使用安全通信"
+      }
+    },
+    {
+      "name": "storage_path_style",
+      "default": "path",
+      "optional": true,
+      "control": "text",
+      "type": "string",
+      "values": [
+        "vhost",
+        "path"
+      ],
+      "hint": {
+        "en_US": "Controls how the connection url is created, check your S3 server requirements.",
+        "zh_CN": "控制連線 URL 的建立方式，請檢查您的 S3 伺服器要求。"
+      },
+      "label": {
+        "en_US": "S3 url style",
+        "zh_CN": "S3 URL 樣式"
+      }
+    }
+  ],
+  "node": {
+    "category": "sink",
+    "icon": "iconPath",
+    "label": {
+      "en": "Ducklake",
+      "zh": "Ducklake"
+    }
+  }
+}

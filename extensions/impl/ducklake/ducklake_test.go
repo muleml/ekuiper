@@ -539,6 +539,27 @@ func TestConnect(t *testing.T) {
 			useFakeConn: true,
 		},
 		{
+			name: "happy path - ssl url style",
+			conf: map[string]any{
+				"storage": map[string]any{
+					"storage_type":     "s3",
+					"storage_endpoint": "test-endpoint:9000",
+					"storage_bucket":   "ducklake",
+					"storage_key_id":   "test_id",
+					"storage_secret":   "test_secret",
+					"use_ssl":          true,
+					"url_style":        "vhost",
+				},
+				"table": "table",
+			},
+			expected: []string{
+				"INSTALL ducklake;",
+				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000', USE_SSL TRUE, URL_STYLE 'vhost');",
+				"CREATE OR REPLACE SECRET ducklake_secret (TYPE ducklake, METADATA_PATH 'metadata.duckdb', DATA_PATH 's3://ducklake', METADATA_PARAMETERS MAP {});",
+				"ATTACH 'ducklake:ducklake_secret' AS the_ducklake;",
+			},
+		},
+		{
 			name: "duckb catalog",
 			conf: map[string]any{
 				"storage": map[string]any{

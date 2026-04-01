@@ -395,7 +395,7 @@ func queryCreateStorageSecret(conf StorageConf) (string, error) {
 			useSSL = "TRUE"
 		}
 		urlStyle := "path"
-		if conf.UrlStyle == "" {
+		if conf.UrlStyle != "" {
 			urlStyle = conf.UrlStyle
 		}
 		query := fmt.Sprintf("CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID '%s', SECRET '%s', ENDPOINT '%s', USE_SSL %s, URL_STYLE '%s');", conf.KeyId, conf.Secret, conf.Endpoint, useSSL, urlStyle)

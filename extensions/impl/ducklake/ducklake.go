@@ -64,6 +64,8 @@ type StorageConf struct {
 type c struct {
 	Table          string `json:"table"`
 	sanitizedTable string
+	viewSeq        uint64
+	ducklakeName   string
 
 	Storage StorageConf
 	Catalog CatalogConf
@@ -76,8 +78,6 @@ type DuckLakeSink struct {
 	arrowMgr             arrowManager
 	buildArrowDataFn     func(api.StreamContext, map[string]any) (arrow.RecordBatch, error)
 	buildArrowDataListFn func(api.StreamContext, []map[string]any) (arrow.RecordBatch, error)
-	viewSeq              uint64
-	ducklakeName         string
 }
 
 func (d *DuckLakeSink) Provision(ctx api.StreamContext, props map[string]any) error {
@@ -86,6 +86,7 @@ func (d *DuckLakeSink) Provision(ctx api.StreamContext, props map[string]any) er
 		Catalog: CatalogConf{
 			Type: "duckdb",
 		},
+		ducklakeName: "the_ducklake",
 	}
 
 	if err := cast.MapToStruct(props, &d.conf); err != nil {
@@ -137,8 +138,6 @@ func (d *DuckLakeSink) Provision(ctx api.StreamContext, props map[string]any) er
 	default:
 		return fmt.Errorf("error configuring ducklake sink: storage type not supported")
 	}
-
-	d.ducklakeName = "the_ducklake"
 
 	ctx.GetLogger().Infof("ducklake sink provision successfully terminated")
 
@@ -265,7 +264,7 @@ func (d *DuckLakeSink) CollectList(ctx api.StreamContext, items api.MessageTuple
 }
 
 func (d *DuckLakeSink) insertRecordBatch(ctx api.StreamContext, batch arrow.RecordBatch) error {
-	viewName := fmt.Sprintf("__ekuiper_ducklake_%d", atomic.AddUint64(&d.viewSeq, 1))
+	viewName := fmt.Sprintf("__ekuiper_ducklake_%d", atomic.AddUint64(&d.conf.viewSeq, 1))
 
 	release, err := d.arrowMgr.RegisterRecordBatch(viewName, batch)
 	if err != nil {
@@ -294,7 +293,7 @@ func (d *DuckLakeSink) getInsertQuery(schema *arrow.Schema, viewName string) (st
 		}
 		columns += field.Name
 	}
-	query := fmt.Sprintf("INSERT INTO %s.%s (%s) SELECT %s FROM %s;", d.ducklakeName, d.conf.sanitizedTable, columns, columns, viewName)
+	query := fmt.Sprintf("INSERT INTO %s.%s (%s) SELECT %s FROM %s;", d.conf.ducklakeName, d.conf.sanitizedTable, columns, columns, viewName)
 	return query, nil
 }
 
@@ -379,7 +378,7 @@ func (d *DuckLakeSink) attachDucklake(ctx context.Context) error {
 		return err
 	}
 
-	query = fmt.Sprintf("ATTACH 'ducklake:ducklake_secret' AS %s;", d.ducklakeName)
+	query = fmt.Sprintf("ATTACH 'ducklake:ducklake_secret' AS %s;", d.conf.ducklakeName)
 	_, err = d.conn.ExecContext(ctx, query)
 	if err != nil {
 		return err

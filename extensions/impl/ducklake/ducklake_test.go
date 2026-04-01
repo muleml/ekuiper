@@ -170,7 +170,8 @@ func TestProvision_Config(t *testing.T) {
 				"catalog": map[string]any{
 					"catalog_type": "duckdb",
 				},
-				"table": "table",
+				"table":        "table",
+				"ducklakeName": "the_ducklake",
 			},
 			expected: c{
 				Catalog: CatalogConf{
@@ -185,6 +186,7 @@ func TestProvision_Config(t *testing.T) {
 				},
 				Table:          "table",
 				sanitizedTable: "table",
+				ducklakeName:   "the_ducklake",
 			},
 		},
 		{
@@ -197,7 +199,8 @@ func TestProvision_Config(t *testing.T) {
 					"storage_key_id":   "test_id",
 					"storage_secret":   "test_secret",
 				},
-				"table": "table",
+				"table":        "table",
+				"ducklakeName": "the_ducklake",
 			},
 			expected: c{
 				Catalog: CatalogConf{
@@ -212,6 +215,7 @@ func TestProvision_Config(t *testing.T) {
 				},
 				Table:          "table",
 				sanitizedTable: "table",
+				ducklakeName:   "the_ducklake",
 			},
 		},
 		{
@@ -232,7 +236,8 @@ func TestProvision_Config(t *testing.T) {
 					"storage_key_id":   "test_id",
 					"storage_secret":   "test_secret",
 				},
-				"table": "table",
+				"table":        "table",
+				"ducklakeName": "the_ducklake",
 			},
 			expected: c{
 				Catalog: CatalogConf{
@@ -252,6 +257,7 @@ func TestProvision_Config(t *testing.T) {
 				},
 				Table:          "table",
 				sanitizedTable: "table",
+				ducklakeName:   "the_ducklake",
 			},
 		},
 		{
@@ -453,7 +459,8 @@ func TestProvision_Config(t *testing.T) {
 					"storage_endpoint": "test-endpoint:9000",
 					"storage_bucket":   "ducklake",
 				},
-				"table": `my table "v1"`,
+				"table":        `my table "v1"`,
+				"ducklakeName": "the_ducklake",
 			},
 			expected: c{
 				Catalog: CatalogConf{Type: "duckdb"},
@@ -464,6 +471,7 @@ func TestProvision_Config(t *testing.T) {
 				},
 				Table:          `my table "v1"`,
 				sanitizedTable: `mytablev1`,
+				ducklakeName:   "the_ducklake",
 			},
 		},
 		{
@@ -1378,7 +1386,9 @@ func TestCollect(t *testing.T) {
 				buildCalls++
 				return buildArrowDataList(ctx, got)
 			},
-			ducklakeName: "the_ducklake",
+			conf: c{
+				ducklakeName: "the_ducklake",
+			},
 		}
 		_ = d.Provision(ctx, map[string]any{"table": "table"})
 		return d, fconn, fav, &buildCalls
@@ -1393,6 +1403,7 @@ func TestCollect(t *testing.T) {
 		wantDBQueries  []string
 		wantViewCalls  int
 		wantReleased   bool
+		fields         []string
 	}{
 		{
 			name:           "happy path",
@@ -1401,6 +1412,15 @@ func TestCollect(t *testing.T) {
 			wantDBQueries:  []string{"INSERT INTO the_ducklake.table (t, u) SELECT t, u FROM __ekuiper_ducklake_1;"},
 			wantViewCalls:  1,
 			wantReleased:   true,
+		},
+		{
+			name:           "happy path - specify fields",
+			data:           map[string]any{"t": int64(20), "u": float64(13.5), "z": float64(1.5)},
+			wantBuildCalls: 1,
+			wantDBQueries:  []string{"INSERT INTO the_ducklake.table (t, u) SELECT t, u FROM __ekuiper_ducklake_1;"},
+			wantViewCalls:  1,
+			wantReleased:   true,
+			fields:         []string{"t", "u"},
 		},
 		{
 			name: "error: buildArrowDataFn returns error",
@@ -1807,7 +1827,9 @@ func TestCollectList(t *testing.T) {
 				buildCalls++
 				return buildArrowData(ctx, got)
 			},
-			ducklakeName: "the_ducklake",
+			conf: c{
+				ducklakeName: "the_ducklake",
+			},
 		}
 		_ = d.Provision(ctx, map[string]any{"table": "table"})
 		return d, fconn, fav, &buildCalls
@@ -1822,6 +1844,7 @@ func TestCollectList(t *testing.T) {
 		wantDBQueries  []string
 		wantViewCalls  int
 		wantReleased   bool
+		fields         []string
 	}{
 		{
 			name:           "happy path",
@@ -1830,6 +1853,15 @@ func TestCollectList(t *testing.T) {
 			wantDBQueries:  []string{"INSERT INTO the_ducklake.table (t, u) SELECT t, u FROM __ekuiper_ducklake_1;"},
 			wantViewCalls:  1,
 			wantReleased:   true,
+		},
+		{
+			name:           "happy path - specify fields",
+			data:           []map[string]any{{"t": int64(20), "u": float64(13.5), "z": float64(1.5)}, {"t": int64(40), "u": float64(26.5), "z": float64(2.5)}},
+			wantBuildCalls: 1,
+			wantDBQueries:  []string{"INSERT INTO the_ducklake.table (t, u) SELECT t, u FROM __ekuiper_ducklake_1;"},
+			wantViewCalls:  1,
+			wantReleased:   true,
+			fields:         []string{"t", "u"},
 		},
 		{
 			name: "error: buildArrowDataListFn returns error",
@@ -1960,9 +1992,11 @@ func TestCollect_InMemoryDB(t *testing.T) {
 		arrowMgr:             arrowMgr,
 		buildArrowDataFn:     buildArrowData,
 		buildArrowDataListFn: buildArrowDataList,
-		ducklakeName:         "memory",
+		conf: c{
+			ducklakeName:   "memory",
+			sanitizedTable: "prova",
+		},
 	}
-	s.conf.sanitizedTable = "prova"
 
 	data := testTuple{map[string]any{"a": int64(20), "b": float64(12.5)}}
 	err = s.Collect(ctx, data)
@@ -2000,9 +2034,11 @@ func TestCollectList_InMemoryDB(t *testing.T) {
 		arrowMgr:             arrowMgr,
 		buildArrowDataFn:     buildArrowData,
 		buildArrowDataListFn: buildArrowDataList,
-		ducklakeName:         "memory",
+		conf: c{
+			ducklakeName:   "memory",
+			sanitizedTable: "prova",
+		},
 	}
-	s.conf.sanitizedTable = "prova"
 
 	data := testTupleList{
 		[]map[string]any{

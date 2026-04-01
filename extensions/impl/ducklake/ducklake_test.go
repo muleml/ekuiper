@@ -531,7 +531,7 @@ func TestConnect(t *testing.T) {
 			},
 			expected: []string{
 				"INSTALL ducklake;",
-				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000');",
+				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000', USE_SSL FALSE, URL_STYLE 'path');",
 				"CREATE OR REPLACE SECRET ducklake_secret (TYPE ducklake, METADATA_PATH 'metadata.duckdb', DATA_PATH 's3://ducklake', METADATA_PARAMETERS MAP {});",
 				"ATTACH 'ducklake:ducklake_secret' AS the_ducklake;",
 			},
@@ -554,7 +554,7 @@ func TestConnect(t *testing.T) {
 			},
 			expected: []string{
 				"INSTALL ducklake;",
-				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000');",
+				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000', USE_SSL FALSE, URL_STYLE 'path');",
 				"CREATE OR REPLACE SECRET ducklake_secret (TYPE ducklake, METADATA_PATH 'metadata.duckdb', DATA_PATH 's3://ducklake', METADATA_PARAMETERS MAP {});",
 				"ATTACH 'ducklake:ducklake_secret' AS the_ducklake;",
 			},
@@ -583,7 +583,7 @@ func TestConnect(t *testing.T) {
 			expected: []string{
 				"INSTALL ducklake;",
 				"INSTALL postgres;",
-				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000');",
+				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000', USE_SSL FALSE, URL_STYLE 'path');",
 				"CREATE OR REPLACE SECRET postgres_secret (TYPE postgres, HOST 'postgres', PORT 5432, DATABASE ducklake_catalog, USER 'user', PASSWORD 'password');",
 				"CREATE OR REPLACE SECRET ducklake_secret (TYPE ducklake, METADATA_PATH '', DATA_PATH 's3://ducklake', METADATA_PARAMETERS MAP {'TYPE': 'postgres', 'SECRET': 'postgres_secret'});",
 				"ATTACH 'ducklake:ducklake_secret' AS the_ducklake;",
@@ -668,7 +668,7 @@ func TestConnect(t *testing.T) {
 			expected: []string{
 				"INSTALL ducklake;",
 				"INSTALL postgres;",
-				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000');",
+				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000', USE_SSL FALSE, URL_STYLE 'path');",
 			},
 			errStr:            "Ducklake sink connection error",
 			numCorrectQueries: 3,
@@ -697,7 +697,7 @@ func TestConnect(t *testing.T) {
 			expected: []string{
 				"INSTALL ducklake;",
 				"INSTALL postgres;",
-				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000');",
+				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000', USE_SSL FALSE, URL_STYLE 'path');",
 				"CREATE OR REPLACE SECRET postgres_secret (TYPE postgres, HOST 'postgres', PORT 5432, DATABASE ducklake_catalog, USER 'user', PASSWORD 'password');",
 			},
 			errStr:            "Ducklake sink connection error",
@@ -727,7 +727,7 @@ func TestConnect(t *testing.T) {
 			expected: []string{
 				"INSTALL ducklake;",
 				"INSTALL postgres;",
-				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000');",
+				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000', USE_SSL FALSE, URL_STYLE 'path');",
 				"CREATE OR REPLACE SECRET postgres_secret (TYPE postgres, HOST 'postgres', PORT 5432, DATABASE ducklake_catalog, USER 'user', PASSWORD 'password');",
 				"CREATE OR REPLACE SECRET ducklake_secret (TYPE ducklake, METADATA_PATH '', DATA_PATH 's3://ducklake', METADATA_PARAMETERS MAP {'TYPE': 'postgres', 'SECRET': 'postgres_secret'});",
 			},
@@ -758,7 +758,7 @@ func TestConnect(t *testing.T) {
 			expected: []string{
 				"INSTALL ducklake;",
 				"INSTALL postgres;",
-				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000');",
+				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000', USE_SSL FALSE, URL_STYLE 'path');",
 				"CREATE OR REPLACE SECRET postgres_secret (TYPE postgres, HOST 'postgres', PORT 5432, DATABASE ducklake_catalog, USER 'user', PASSWORD 'password');",
 				"CREATE OR REPLACE SECRET ducklake_secret (TYPE ducklake, METADATA_PATH '', DATA_PATH 's3://ducklake', METADATA_PARAMETERS MAP {'TYPE': 'postgres', 'SECRET': 'postgres_secret'});",
 				"ATTACH 'ducklake:ducklake_secret' AS the_ducklake;",
@@ -901,7 +901,7 @@ func TestPing(t *testing.T) {
 			},
 			expected: []string{
 				"INSTALL ducklake;",
-				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000');",
+				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000', USE_SSL FALSE, URL_STYLE 'path');",
 				"CREATE OR REPLACE SECRET ducklake_secret (TYPE ducklake, METADATA_PATH 'metadata.duckdb', DATA_PATH 's3://ducklake', METADATA_PARAMETERS MAP {});",
 				"ATTACH 'ducklake:ducklake_secret' AS the_ducklake;",
 				"USE memory;",
@@ -925,7 +925,7 @@ func TestPing(t *testing.T) {
 			},
 			expected: []string{
 				"INSTALL ducklake;",
-				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000');",
+				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000', USE_SSL FALSE, URL_STYLE 'path');",
 				"CREATE OR REPLACE SECRET ducklake_secret (TYPE ducklake, METADATA_PATH 'metadata.duckdb', DATA_PATH 's3://ducklake', METADATA_PARAMETERS MAP {});",
 				"ATTACH 'ducklake:ducklake_secret' AS the_ducklake;",
 				"USE memory;",
@@ -955,7 +955,7 @@ func TestPing(t *testing.T) {
 			expected: []string{
 				"INSTALL ducklake;",
 				"INSTALL postgres;",
-				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000');",
+				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000', USE_SSL FALSE, URL_STYLE 'path');",
 				"CREATE OR REPLACE SECRET postgres_secret (TYPE postgres, HOST 'postgres', PORT 5432, DATABASE ducklake_catalog, USER 'user', PASSWORD 'password');",
 				"CREATE OR REPLACE SECRET ducklake_secret (TYPE ducklake, METADATA_PATH '', DATA_PATH 's3://ducklake', METADATA_PARAMETERS MAP {'TYPE': 'postgres', 'SECRET': 'postgres_secret'});",
 				"ATTACH 'ducklake:ducklake_secret' AS the_ducklake;",
@@ -1039,7 +1039,7 @@ func TestPing(t *testing.T) {
 			expected: []string{
 				"INSTALL ducklake;",
 				"INSTALL postgres;",
-				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000');",
+				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000', USE_SSL FALSE, URL_STYLE 'path');",
 			},
 			errStr:            "Ducklake sink ping connection error",
 			numCorrectQueries: 3,
@@ -1067,7 +1067,7 @@ func TestPing(t *testing.T) {
 			expected: []string{
 				"INSTALL ducklake;",
 				"INSTALL postgres;",
-				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000');",
+				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000', USE_SSL FALSE, URL_STYLE 'path');",
 				"CREATE OR REPLACE SECRET postgres_secret (TYPE postgres, HOST 'postgres', PORT 5432, DATABASE ducklake_catalog, USER 'user', PASSWORD 'password');",
 			},
 			errStr:            "Ducklake sink ping connection error",
@@ -1096,7 +1096,7 @@ func TestPing(t *testing.T) {
 			expected: []string{
 				"INSTALL ducklake;",
 				"INSTALL postgres;",
-				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000');",
+				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000', USE_SSL FALSE, URL_STYLE 'path');",
 				"CREATE OR REPLACE SECRET postgres_secret (TYPE postgres, HOST 'postgres', PORT 5432, DATABASE ducklake_catalog, USER 'user', PASSWORD 'password');",
 				"CREATE OR REPLACE SECRET ducklake_secret (TYPE ducklake, METADATA_PATH '', DATA_PATH 's3://ducklake', METADATA_PARAMETERS MAP {'TYPE': 'postgres', 'SECRET': 'postgres_secret'});",
 			},
@@ -1126,7 +1126,7 @@ func TestPing(t *testing.T) {
 			expected: []string{
 				"INSTALL ducklake;",
 				"INSTALL postgres;",
-				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000');",
+				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000', USE_SSL FALSE, URL_STYLE 'path');",
 				"CREATE OR REPLACE SECRET postgres_secret (TYPE postgres, HOST 'postgres', PORT 5432, DATABASE ducklake_catalog, USER 'user', PASSWORD 'password');",
 				"CREATE OR REPLACE SECRET ducklake_secret (TYPE ducklake, METADATA_PATH '', DATA_PATH 's3://ducklake', METADATA_PARAMETERS MAP {'TYPE': 'postgres', 'SECRET': 'postgres_secret'});",
 				"ATTACH 'ducklake:ducklake_secret' AS the_ducklake;",

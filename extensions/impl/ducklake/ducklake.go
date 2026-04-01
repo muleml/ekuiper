@@ -388,7 +388,7 @@ func (d *DuckLakeSink) attachDucklake(ctx context.Context) error {
 func queryCreateStorageSecret(conf StorageConf) (string, error) {
 	switch conf.Type {
 	case "s3":
-		query := fmt.Sprintf("CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID '%s', SECRET '%s', ENDPOINT '%s');", conf.KeyId, conf.Secret, conf.Endpoint)
+		query := fmt.Sprintf("CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID '%s', SECRET '%s', ENDPOINT '%s', USE_SSL FALSE, URL_STYLE 'path');", conf.KeyId, conf.Secret, conf.Endpoint)
 		return query, nil
 	default:
 		return "", fmt.Errorf("error connecting ducklake sink: storage type not supported")

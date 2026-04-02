@@ -48,7 +48,7 @@ jobs:
           pull: true
           cache-from: type=local,src=/tmp/.docker-buildx-cache,mode=max
           cache-to: type=local,dest=/tmp/.docker-buildx-cache-new,mode=max
-          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          platforms: linux/amd64,linux/arm64
           build-args: GO_VERSION=${{ matrix.golang }}
           tags: ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}-base:${{ matrix.golang }}-${{ matrix.os }}
           file: .github/dockerfile/Dockerfile.${{ matrix.os }}

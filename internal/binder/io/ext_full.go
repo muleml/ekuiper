@@ -19,6 +19,7 @@ package io
 import (
 	"github.com/lf-edge/ekuiper/contract/v2/api"
 
+	"github.com/lf-edge/ekuiper/v2/extensions/impl/ducklake"
 	"github.com/lf-edge/ekuiper/v2/extensions/impl/image"
 	"github.com/lf-edge/ekuiper/v2/extensions/impl/influx"
 	"github.com/lf-edge/ekuiper/v2/extensions/impl/influx2"
@@ -37,6 +38,7 @@ func init() {
 	modules.RegisterSink("influx", func() api.Sink { return influx.GetSink() })
 	modules.RegisterSink("influx2", func() api.Sink { return influx2.GetSink() })
 	modules.RegisterSink("influx3", func() api.Sink { return influx3.GetSink() })
+	modules.RegisterSink("ducklake", func() api.Sink { return ducklake.GetSink() })
 	modules.RegisterSource("sql", sql2.GetSource)
 	modules.RegisterLookupSource("sql", sql2.GetLookupSource)
 	modules.RegisterSink("sql", sql2.GetSink)

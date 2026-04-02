@@ -35,8 +35,18 @@ jobs:
       - name: Install dependencies
         env:
           DEBIAN_FRONTEND: noninteractive
+          DUCKDB_VERSION: "1.5.1"
         run: |
-          pip3 install pynng==0.8.1 && sudo apt-get update && sudo apt-get install ffmpeg libzmq3-dev -y
+          pip3 install pynng==0.8.1
+          sudo apt-get update && sudo apt-get install ffmpeg libzmq3-dev unzip -y
+          wget --no-verbose https://github.com/duckdb/duckdb/releases/download/v${DUCKDB_VERSION}/libduckdb-linux-amd64.zip -O /tmp/libduckdb.zip
+          unzip /tmp/libduckdb.zip -d /tmp/libduckdb
+          sudo cp /tmp/libduckdb/libduckdb.so /usr/local/lib/
+          sudo cp /tmp/libduckdb/libduckdb_static.a /usr/local/lib/
+          sudo cp /tmp/libduckdb/duckdb.h /usr/local/include/
+          sudo cp /tmp/libduckdb/duckdb.hpp /usr/local/include/
+          sudo ldconfig
+          rm -rf /tmp/libduckdb.zip /tmp/libduckdb
       - name: make install.sh executable
         run: chmod +x ./extensions/functions/onnx/install.sh
       - name: Build plugins
@@ -73,13 +83,13 @@ jobs:
           
           # 1. Run MAIN tests (With Race)
           # We ADD -skip to avoid running the special tests here
-          go test -trimpath -race -tags="edgex msgpack script parquet test rpc" \
+          go test -trimpath -race -tags="edgex msgpack script parquet test rpc duckdb_arrow duckdb_use_lib" \
             -skip "TestMsgpackService|TestExtensions|TestFuncState|TestFuncStateCheckpoint|TestStartCPUProfiling" \
             -cover -covermode=atomic -coverpkg=./... -coverprofile=cover_race.out \
             $(go list ./... | grep -v "github.com/lf-edge/ekuiper/v2/fvt")
       
           # 2. Run SPECIAL tests (No Race)
-          go test -trimpath -tags="edgex msgpack script parquet test rpc" \
+          go test -trimpath -tags="edgex msgpack script parquet test rpc duckdb_arrow duckdb_use_lib" \
             -run "TestMsgpackService|TestExtensions|TestFuncState|TestFuncStateCheckpoint|TestStartCPUProfiling" \
             -cover -covermode=atomic -coverpkg=./... -coverprofile=cover_norace.out \
             ./internal/service ./internal/topo/exttest ./internal/server/proftest
@@ -112,7 +122,7 @@ jobs:
       - name: Run fvt
         run: |
           export KUIPER__BASIC__ALLOWEXTERNALFILEACCESS="true"
-          go test -trimpath -race -tags="full deadlock" --cover -covermode=atomic -coverpkg=./... -coverprofile=fvt_coverage.xml ./fvt
+          go test -trimpath -race -tags="full deadlock duckdb_arrow duckdb_use_lib" --cover -covermode=atomic -coverpkg=./... -coverprofile=fvt_coverage.xml ./fvt
           total_coverage=$(go tool cover -func=coverage.xml 2>/dev/null | grep total | awk '{print $3}')
           echo "Total coverage: $total_coverage"
       - uses: actions/upload-artifact@v4

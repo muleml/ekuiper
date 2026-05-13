@@ -17,7 +17,7 @@ FROM debian:bullseye
 
 ARG GO_VERSION
 # Keep this version in sync with .github/workflows/run_test_case.yaml (DUCKDB_VERSION)
-ARG DUCKDB_VERSION=1.5.1
+ARG DUCKDB_VERSION=1.5.2
 ARG DEBIAN_FRONTEND="noninteractive"
 
 RUN apt-get update -y \

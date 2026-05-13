@@ -41,7 +41,7 @@ jobs:
 
     env:
       JMETER_VERSION: 5.4.3
-      DUCKDB_VERSION: 1.5.1
+      DUCKDB_VERSION: 1.5.2
 
     steps:
       - uses: actions/setup-go@v5
@@ -65,7 +65,7 @@ jobs:
           key: apache-jmeter-${{ env.JMETER_VERSION }}
       - name: Download jmeter
         if: steps.cache-jmeter.outputs.cache-hit != 'true'
-        timeout-minutes: 10
+        timeout-minutes: 20
         env:
           JMETER_VERSION: ${{ env.JMETER_VERSION }}
         run: |
@@ -194,10 +194,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: apache-jmeter.tgz
-          key: apache-jmeter-${{ env.JMETER_VERSION }}
+          key: apache-jmeter2${{ env.JMETER_VERSION }}
       - name: Download jmeter
         if: steps.cache-jmeter.outputs.cache-hit != 'true'
-        timeout-minutes: 10
+        timeout-minutes: 20
         env:
           JMETER_VERSION: ${{ env.JMETER_VERSION }}
         run: |
@@ -314,7 +314,7 @@ jobs:
         key: apache-jmeter-${{ env.JMETER_VERSION }}
     - name: Download jmeter
       if: steps.cache-jmeter.outputs.cache-hit != 'true'
-      timeout-minutes: 10
+      timeout-minutes: 20
       env:
         JMETER_VERSION: ${{ env.JMETER_VERSION }}
       run: |

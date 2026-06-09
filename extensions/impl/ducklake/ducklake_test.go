@@ -1211,9 +1211,7 @@ func TestPing(t *testing.T) {
 			conn := &fakeConn{errStr: tt.errStr, numCorrectQueries: tt.numCorrectQueries}
 			db := &fakeDB{}
 			s := &DuckLakeSink{db: db, conn: conn}
-			err := s.Provision(ctx, tt.conf)
-			require.NoError(t, err)
-			err = s.Ping(ctx, tt.conf)
+			err := s.Ping(ctx, tt.conf)
 			require.Equal(t, 1, db.closeCalls)
 			require.Equal(t, 1, conn.closeCalls)
 			if tt.errStr != "" {

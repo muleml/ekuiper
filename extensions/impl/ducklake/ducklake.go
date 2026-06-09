@@ -82,7 +82,16 @@ type DuckLakeSink struct {
 }
 
 func (d *DuckLakeSink) Provision(ctx api.StreamContext, props map[string]any) error {
+	if err := d.configure(props); err != nil {
+		return err
+	}
 
+	ctx.GetLogger().Infof("ducklake sink provision successfully terminated")
+
+	return nil
+}
+
+func (d *DuckLakeSink) configure(props map[string]any) error {
 	d.conf = c{
 		Catalog: CatalogConf{
 			Type: "duckdb",
@@ -140,8 +149,6 @@ func (d *DuckLakeSink) Provision(ctx api.StreamContext, props map[string]any) er
 		return fmt.Errorf("error configuring ducklake sink: storage type not supported")
 	}
 
-	ctx.GetLogger().Infof("ducklake sink provision successfully terminated")
-
 	return nil
 }
 
@@ -191,6 +198,10 @@ func (d *DuckLakeSink) Close(ctx api.StreamContext) error {
 }
 
 func (d *DuckLakeSink) Ping(ctx api.StreamContext, props map[string]any) error {
+	if err := d.configure(props); err != nil {
+		return err
+	}
+
 	if d.db == nil {
 		err := d.setupDuckdb("")
 		if err != nil {

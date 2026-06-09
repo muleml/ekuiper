@@ -26,7 +26,7 @@ require (
 	github.com/denisenkom/go-mssqldb v0.12.3
 	github.com/dolthub/go-mysql-server v0.18.1
 	github.com/dop251/goja v0.0.0-20240828124009-016eb7256539
-	github.com/duckdb/duckdb-go/v2 v2.10501.0
+	github.com/duckdb/duckdb-go/v2 v2.10502.0
 	github.com/eclipse/paho.golang v0.21.0
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/edgexfoundry/go-mod-core-contracts/v4 v4.0.1
@@ -140,6 +140,7 @@ require (
 	github.com/cockroachdb/redact v1.1.5 // indirect
 	github.com/cockroachdb/tokenbucket v0.0.0-20230807174530-cc333fc44b06 // indirect
 <<<<<<< HEAD
+<<<<<<< HEAD
 	github.com/docker/cli v29.3.0+incompatible // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/envoyproxy/go-control-plane/envoy v1.37.0 // indirect
@@ -164,6 +165,14 @@ require (
 	github.com/duckdb/duckdb-go-bindings/lib/linux-amd64 v0.10501.0 // indirect
 	github.com/duckdb/duckdb-go-bindings/lib/linux-arm64 v0.10501.0 // indirect
 	github.com/duckdb/duckdb-go-bindings/lib/windows-amd64 v0.10501.0 // indirect
+=======
+	github.com/duckdb/duckdb-go-bindings v0.10502.0 // indirect
+	github.com/duckdb/duckdb-go-bindings/lib/darwin-amd64 v0.10502.0 // indirect
+	github.com/duckdb/duckdb-go-bindings/lib/darwin-arm64 v0.10502.0 // indirect
+	github.com/duckdb/duckdb-go-bindings/lib/linux-amd64 v0.10502.0 // indirect
+	github.com/duckdb/duckdb-go-bindings/lib/linux-arm64 v0.10502.0 // indirect
+	github.com/duckdb/duckdb-go-bindings/lib/windows-amd64 v0.10502.0 // indirect
+>>>>>>> 9f46f587 (aggiustato bug in ping)
 	github.com/envoyproxy/go-control-plane/envoy v1.35.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.7.0 // indirect
 	github.com/getsentry/sentry-go v0.18.0 // indirect

@@ -190,6 +190,38 @@ func TestProvision_Config(t *testing.T) {
 			},
 		},
 		{
+			name: "bucket name not ducklake",
+			conf: map[string]any{
+				"storage": map[string]any{
+					"storage_type":     "s3",
+					"storage_endpoint": "test-endpoint:9000",
+					"storage_bucket":   "not-ducklake",
+					"storage_key_id":   "test_id",
+					"storage_secret":   "test_secret",
+				},
+				"catalog": map[string]any{
+					"catalog_type": "duckdb",
+				},
+				"table":        "table",
+				"ducklakeName": "the_ducklake",
+			},
+			expected: c{
+				Catalog: CatalogConf{
+					Type: "duckdb",
+				},
+				Storage: StorageConf{
+					Type:     "s3",
+					Endpoint: "test-endpoint:9000",
+					Bucket:   "not-ducklake",
+					KeyId:    "test_id",
+					Secret:   "test_secret",
+				},
+				Table:          "table",
+				sanitizedTable: "table",
+				ducklakeName:   "the_ducklake",
+			},
+		},
+		{
 			name: "duckb catalog",
 			conf: map[string]any{
 				"storage": map[string]any{
@@ -542,6 +574,27 @@ func TestConnect(t *testing.T) {
 				"INSTALL ducklake;",
 				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000', USE_SSL FALSE, URL_STYLE 'path');",
 				"CREATE OR REPLACE SECRET ducklake_secret (TYPE ducklake, METADATA_PATH 'metadata.duckdb', DATA_PATH 's3://ducklake', METADATA_PARAMETERS MAP {});",
+				"ATTACH 'ducklake:ducklake_secret' AS the_ducklake;",
+			},
+			useFakeConn: true,
+		},
+		{
+			name: "default bucket not ducklake",
+			conf: map[string]any{
+				"storage": map[string]any{
+					"storage_type":     "s3",
+					"storage_endpoint": "test-endpoint:9000",
+					"storage_bucket":   "not-ducklake",
+					"storage_key_id":   "test_id",
+					"storage_secret":   "test_secret",
+					"url_style":        "path",
+				},
+				"table": "table",
+			},
+			expected: []string{
+				"INSTALL ducklake;",
+				"CREATE OR REPLACE SECRET s3_secret (TYPE s3, KEY_ID 'test_id', SECRET 'test_secret', ENDPOINT 'test-endpoint:9000', USE_SSL FALSE, URL_STYLE 'path');",
+				"CREATE OR REPLACE SECRET ducklake_secret (TYPE ducklake, METADATA_PATH 'metadata.duckdb', DATA_PATH 's3://not-ducklake', METADATA_PARAMETERS MAP {});",
 				"ATTACH 'ducklake:ducklake_secret' AS the_ducklake;",
 			},
 			useFakeConn: true,

@@ -459,7 +459,7 @@ func queryCreateSecretDucklake(conf StorageConf, catalogType string) (string, er
 	var dataPath string
 	switch conf.Type {
 	case "s3":
-		dataPath = "s3://ducklake"
+		dataPath = fmt.Sprintf("s3://%s", conf.Bucket)
 	default:
 		return "", fmt.Errorf("error connecting ducklake sink: storage type not supported")
 	}

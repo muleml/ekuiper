@@ -20,6 +20,6 @@ import (
 	"github.com/lf-edge/ekuiper/v2/extensions/impl/ducklake"
 )
 
-func Influx3() api.Sink {
+func Ducklake() api.Sink {
 	return ducklake.GetSink()
 }

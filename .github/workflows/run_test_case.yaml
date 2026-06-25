@@ -187,7 +187,7 @@ jobs:
           FVT_KAFKA_BROKER: 127.0.0.1:9092
           KUIPER__BASIC__ALLOWEXTERNALFILEACCESS: "true"
         run: |
-          go test -trimpath -race -tags="full deadlock" -count=1 -v ./fvt -run TestKafkaConnectionSelectorSinkE2E
+          go test -trimpath -race -tags="full deadlock duckdb_arrow duckdb_use_lib" -count=1 -v ./fvt -run TestKafkaConnectionSelectorSinkE2E
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

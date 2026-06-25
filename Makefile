@@ -114,6 +114,8 @@ build_core: build_prepare
 PLUGINS_IN_FULL := \
 	extensions/sinks/influx \
 	extensions/sinks/influx2 \
+	extensions/sinks/influx3 \
+	extensions/sinks/ducklake \
 	extensions/sinks/kafka \
 	extensions/sinks/image \
 	extensions/sinks/sql   \
@@ -129,7 +131,7 @@ PLUGINS_IN_FULL := \
 build_full: SHELL:=/bin/bash -euo pipefail
 build_full: build_prepare
 	GO111MODULE=on CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X github.com/lf-edge/ekuiper/v2/cmd.Version=$(VERSION) -X github.com/lf-edge/ekuiper/v2/cmd.LoadFileType=relative" -o kuiper cmd/kuiper/main.go
-	GO111MODULE=on CGO_ENABLED=1 go build -trimpath -ldflags="-s -w -X github.com/lf-edge/ekuiper/v2/cmd.Version=$(VERSION) -X github.com/lf-edge/ekuiper/v2/cmd.LoadFileType=relative" -tags "full include_nats_messaging" -o kuiperd cmd/kuiperd/main.go
+	GO111MODULE=on CGO_ENABLED=1 go build -trimpath -ldflags="-s -w -X github.com/lf-edge/ekuiper/v2/cmd.Version=$(VERSION) -X github.com/lf-edge/ekuiper/v2/cmd.LoadFileType=relative" -tags "full include_nats_messaging duckdb_arrow duckdb_use_lib" -o kuiperd cmd/kuiperd/main.go
 	@if [ "$$(uname -s)" = "Linux" ] && [ ! -z $$(which upx) ]; then upx ./kuiper; upx ./kuiperd; fi
 	@mv ./kuiper ./kuiperd $(BUILD_PATH)/$(PACKAGE_NAME)/bin
 	@while read plugin; do \
@@ -174,6 +176,7 @@ docker:
 
 PLUGINS := sinks/influx \
 	sinks/influx2 \
+	sinks/influx3 \
 	sinks/zmq \
 	sinks/kafka \
 	sinks/image \

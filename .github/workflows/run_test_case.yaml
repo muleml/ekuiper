@@ -35,7 +35,7 @@ jobs:
       - name: Install dependencies
         env:
           DEBIAN_FRONTEND: noninteractive
-          DUCKDB_VERSION: "1.5.1"
+          DUCKDB_VERSION: "1.5.2"
         run: |
           pip3 install pynng==0.8.1
           sudo apt-get update && sudo apt-get install ffmpeg libzmq3-dev unzip -y

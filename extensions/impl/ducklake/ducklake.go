@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -77,9 +78,11 @@ type DuckLakeSink struct {
 	db                   sqlPool
 	conn                 sqlEngine
 	arrowMgr             arrowManager
-	buildArrowDataFn     func(api.StreamContext, map[string]any) (arrow.RecordBatch, error)
-	buildArrowDataListFn func(api.StreamContext, []map[string]any) (arrow.RecordBatch, error)
+	buildArrowDataFn     func(api.StreamContext, map[string]any, []string) (arrow.RecordBatch, error)
+	buildArrowDataListFn func(api.StreamContext, []map[string]any, []string) (arrow.RecordBatch, error)
 }
+
+var _ model.SinkInfoNode = &DuckLakeSink{}
 
 func (d *DuckLakeSink) Provision(ctx api.StreamContext, props map[string]any) error {
 	if err := d.configure(props); err != nil {
@@ -111,6 +114,9 @@ func (d *DuckLakeSink) configure(props map[string]any) error {
 	// input sanitizer
 	d.conf.sanitizedTable = strings.ReplaceAll(d.conf.Table, `"`, ``)
 	d.conf.sanitizedTable = strings.ReplaceAll(d.conf.sanitizedTable, ` `, ``)
+	if err := validateFields(d.conf.Fields); err != nil {
+		return fmt.Errorf("error configuring ducklake sink: %s", err)
+	}
 
 	if err := cast.MapToStruct(props, &d.conf.Catalog); err != nil {
 		return fmt.Errorf("error configuring ducklake sink: %s", err)
@@ -247,7 +253,7 @@ func (d *DuckLakeSink) Collect(ctx api.StreamContext, item api.MessageTuple) err
 	if err != nil {
 		return fmt.Errorf("Ducklake sink collect error: %s", err)
 	}
-	arrowData, err := d.buildArrowDataFn(ctx, data)
+	arrowData, err := d.buildArrowDataFn(ctx, data, d.conf.Fields)
 	if err != nil {
 		return fmt.Errorf("Ducklake sink collect error - arrow build failed: %s", err)
 	}
@@ -264,7 +270,7 @@ func (d *DuckLakeSink) CollectList(ctx api.StreamContext, items api.MessageTuple
 	if err != nil {
 		return fmt.Errorf("Ducklake sink collect error: %s", err)
 	}
-	arrowData, err := d.buildArrowDataListFn(ctx, data)
+	arrowData, err := d.buildArrowDataListFn(ctx, data, d.conf.Fields)
 	if err != nil {
 		return fmt.Errorf("Ducklake sink collect error - arrow build failed: %s", err)
 	}
@@ -295,7 +301,7 @@ func (d *DuckLakeSink) insertRecordBatch(ctx api.StreamContext, batch arrow.Reco
 }
 
 func (d *DuckLakeSink) getInsertQuery(schema *arrow.Schema, viewName string) (string, error) {
-	fields, err := d.getFields(schema)
+	fields, err := fieldsFromSchema(schema)
 	if err != nil {
 		return "", err
 	}
@@ -310,18 +316,69 @@ func (d *DuckLakeSink) getInsertQuery(schema *arrow.Schema, viewName string) (st
 	return query, nil
 }
 
-func (d *DuckLakeSink) getFields(schema *arrow.Schema) ([]string, error) {
-	if len(d.conf.Fields) > 0 {
-		return d.conf.Fields, nil
-	}
+// fieldsFromSchema returns the column names of the arrow batch schema, in order.
+// It is the only source of truth for the INSERT/SELECT column list: the schema is
+// built from the declared fields or from the batch union, so list and view cannot diverge.
+// Every name is validated as a plain identifier because it is interpolated in the INSERT
+// statement without quoting.
+func fieldsFromSchema(schema *arrow.Schema) ([]string, error) {
 	if len(schema.Fields()) == 0 {
 		return nil, fmt.Errorf("empty arrow schema")
 	}
-	var fields []string
+	fields := make([]string, 0, len(schema.Fields()))
 	for _, field := range schema.Fields() {
+		if err := validateIdentifier(field.Name); err != nil {
+			return nil, err
+		}
 		fields = append(fields, field.Name)
 	}
 	return fields, nil
+}
+
+// isPlainIdentifier reports whether s is a plain SQL identifier: letters, digits and
+// underscore, not starting with a digit. Column names are interpolated in the INSERT
+// statement, so anything else is rejected instead of quoted.
+func isPlainIdentifier(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r == '_':
+			// always allowed
+		case r >= '0' && r <= '9' && i > 0:
+			// digits are allowed only after the first character
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// validateIdentifier rejects names that cannot be interpolated safely in a query.
+func validateIdentifier(name string) error {
+	if !isPlainIdentifier(name) {
+		return fmt.Errorf("invalid field name %q: use only letters, digits and underscore, and do not start with a digit", name)
+	}
+	return nil
+}
+
+// validateFields rejects declared fields that cannot identify a column unambiguously.
+func validateFields(fields []string) error {
+	seen := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
+		if strings.TrimSpace(field) == "" {
+			return fmt.Errorf("empty field in fields")
+		}
+		if _, ok := seen[field]; ok {
+			return fmt.Errorf("duplicated field %q", field)
+		}
+		seen[field] = struct{}{}
+		if err := validateIdentifier(field); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (d *DuckLakeSink) checkSetup() error {
@@ -367,7 +424,7 @@ func (d *DuckLakeSink) setupArrowManager(ctx api.StreamContext) error {
 }
 
 func (d *DuckLakeSink) Info() model.SinkInfo {
-	return model.SinkInfo{}
+	return model.SinkInfo{HasFields: len(d.conf.Fields) > 0}
 }
 
 func (d *DuckLakeSink) attachDucklake(ctx context.Context) error {
@@ -468,94 +525,194 @@ func queryCreateSecretDucklake(conf StorageConf, catalogType string) (string, er
 	return secret, nil
 }
 
-func buildArrowData(ctx api.StreamContext, data map[string]any) (arrow.RecordBatch, error) {
+// buildArrowData builds the arrow record batch for a single row.
+func buildArrowData(ctx api.StreamContext, row map[string]any, fields []string) (arrow.RecordBatch, error) {
+	return buildArrowDataList(ctx, []map[string]any{row}, fields)
+}
+
+// buildArrowDataList builds the arrow record batch for a batch of rows.
+// Map-empty rows are skipped because they would only produce all-NULL rows; the
+// row number reported in the error wrapper always refers to the index in the
+// original slice, so the meaning of the "Row <n>" messages is preserved.
+// Missing values are reported once per batch instead of once per value.
+// The schema is driven by the declared fields when they are provided (declared
+// order), otherwise it is inferred from the union of the non-nil keys of the
+// usable rows.
+func buildArrowDataList(ctx api.StreamContext, data []map[string]any, fields []string) (arrow.RecordBatch, error) {
 	if len(data) < 1 {
 		ctx.GetLogger().Errorf("Ducklake sink: empty data")
 		return nil, nil
 	}
 
-	arrowInferredSchema, err := inferArrowSchemaFromRow(ctx, data)
+	rows := make([]map[string]any, 0, len(data))
+	rowNums := make([]int, 0, len(data))
+	for rowNum, row := range data {
+		if len(row) == 0 {
+			continue
+		}
+		rows = append(rows, row)
+		rowNums = append(rowNums, rowNum)
+	}
+	if skipped := len(data) - len(rows); skipped > 0 {
+		ctx.GetLogger().Debugf("ducklake sink: skipped %d empty row(s)", skipped)
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+
+	var (
+		arrowInferredSchema *inferredSchema
+		err                 error
+	)
+	if len(fields) > 0 {
+		arrowInferredSchema, err = arrowSchemaFromFields(fields, rows)
+	} else {
+		arrowInferredSchema, err = inferArrowSchemaFromRows(rows)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("Ducklake sink error creating arrow data: %s", err)
 	}
 	if arrowInferredSchema == nil {
 		return nil, nil
 	}
+
+	if len(fields) > 0 {
+		warnUndeclaredFields(ctx, arrowInferredSchema, rows)
+	}
+
 	rb := array.NewRecordBuilder(memory.DefaultAllocator, arrowInferredSchema.schema)
 	defer rb.Release()
 
-	if err := appendRow(ctx, rb, arrowInferredSchema, data, 0, true); err != nil {
-		return nil, fmt.Errorf("Ducklake sink error creating arrow data: %s - ", err)
+	missingFields := make([]string, 0)
+	for i, row := range rows {
+		missing, err := appendRow(rb, arrowInferredSchema, row)
+		if err != nil {
+			return nil, fmt.Errorf("Ducklake sink error creating arrow data: %s - Row <%d>", err, rowNums[i])
+		}
+		missingFields = append(missingFields, missing...)
 	}
+	logMissingValues(ctx, missingFields)
 	return rb.NewRecordBatch(), nil
 }
 
-func buildArrowDataList(ctx api.StreamContext, data []map[string]any) (arrow.RecordBatch, error) {
-	if len(data) < 1 {
-		ctx.GetLogger().Errorf("Ducklake sink: empty data")
-		return nil, nil
+// warnUndeclaredFields logs one warning per key that appears in the rows but is
+// not part of the declared schema. Undeclared keys are already ignored because
+// appendRow iterates over schema.keys only; this helper just surfaces them.
+func warnUndeclaredFields(ctx api.StreamContext, schema *inferredSchema, rows []map[string]any) {
+	declared := make(map[string]struct{}, len(schema.keys))
+	for _, k := range schema.keys {
+		declared[k] = struct{}{}
 	}
-	if len(data[0]) == 0 {
-		ctx.GetLogger().Errorf("Ducklake sink: empty first row")
-		return nil, nil
-	}
-
-	arrowInferredSchema, err := inferArrowSchemaFromRow(ctx, data[0])
-	if err != nil {
-		return nil, fmt.Errorf("Ducklake sink error creating arrow data: %s", err)
-	}
-	if arrowInferredSchema != nil {
-		rb := array.NewRecordBuilder(memory.DefaultAllocator, arrowInferredSchema.schema)
-		defer rb.Release()
-
-		for rowIdx, row := range data {
-			if err := appendRow(ctx, rb, arrowInferredSchema, row, rowIdx, true); err != nil {
-				return nil, fmt.Errorf("Ducklake sink error creating arrow data: %s - Row <%d>", err, rowIdx)
+	seen := make(map[string]struct{})
+	undeclared := make([]string, 0)
+	for _, row := range rows {
+		for k := range row {
+			if _, ok := declared[k]; ok {
+				continue
 			}
+			if _, ok := seen[k]; ok {
+				continue
+			}
+			seen[k] = struct{}{}
+			undeclared = append(undeclared, k)
 		}
-		return rb.NewRecordBatch(), nil
 	}
-	return nil, nil
+	sort.Strings(undeclared)
+	for _, k := range undeclared {
+		ctx.GetLogger().Warnf("ducklake sink: ignoring undeclared field <%s>", k)
+	}
 }
 
-func inferArrowSchemaFromRow(ctx api.StreamContext, row map[string]any) (*inferredSchema, error) {
-	if len(row) == 0 {
-		return nil, fmt.Errorf("Ducklake sink: row is empty")
+// arrowTypeForValue derives the arrow data type from the Go type of v.
+// ok is false when the value type is not supported.
+func arrowTypeForValue(v any) (arrow.DataType, bool) {
+	switch v.(type) {
+	case string:
+		return arrow.BinaryTypes.String, true
+	case bool:
+		return arrow.FixedWidthTypes.Boolean, true
+	case float32, float64:
+		return arrow.PrimitiveTypes.Float64, true
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		return arrow.PrimitiveTypes.Int64, true
+	case time.Time:
+		return arrow.FixedWidthTypes.Timestamp_ms, true
+	default:
+		return nil, false
+	}
+}
+
+// arrowSchemaFromFields builds the batch schema from the declared fields, keeping their order.
+// The column type is derived from the first non-nil value found while scanning rows; a declared
+// column that no row values is mapped to arrow.BinaryTypes.String.
+func arrowSchemaFromFields(fields []string, rows []map[string]any) (*inferredSchema, error) {
+	if len(fields) == 0 {
+		return nil, nil
 	}
 
-	keys := make([]string, 0, len(row))
-	for k := range row {
-		if row[k] != nil {
-			keys = append(keys, k)
-		} else {
-			ctx.GetLogger().Errorf("Ducklake sink: empty value inferring schema, field <%s>", k)
+	keys := make([]string, len(fields))
+	copy(keys, fields)
+
+	arrowFields := make([]arrow.Field, len(keys))
+	dts := make([]arrow.DataType, len(keys))
+	for i, name := range keys {
+		var dt arrow.DataType = arrow.BinaryTypes.String
+		for _, row := range rows {
+			v, ok := row[name]
+			if !ok || v == nil {
+				continue
+			}
+			t, supported := arrowTypeForValue(v)
+			if !supported {
+				return nil, fmt.Errorf("field <%s> has unsupported type <%T>", name, v)
+			}
+			dt = t
+			break
+		}
+		arrowFields[i] = arrow.Field{Name: name, Type: dt, Nullable: true}
+		dts[i] = dt
+	}
+	return &inferredSchema{
+		keys:   keys,
+		schema: arrow.NewSchema(arrowFields, nil),
+		dts:    dts,
+	}, nil
+}
+
+// inferArrowSchemaFromRows builds the schema from the union of the non-nil keys of all rows,
+// sorted alphabetically; the type comes from the first value met for each key.
+// It returns (nil, nil) when no row carries a usable value.
+func inferArrowSchemaFromRows(rows []map[string]any) (*inferredSchema, error) {
+	dtsByKey := make(map[string]arrow.DataType)
+	for _, row := range rows {
+		for k, v := range row {
+			if v == nil {
+				continue
+			}
+			if _, ok := dtsByKey[k]; ok {
+				continue
+			}
+			dt, supported := arrowTypeForValue(v)
+			if !supported {
+				return nil, fmt.Errorf("field <%s> has unsupported type <%T>", k, v)
+			}
+			dtsByKey[k] = dt
 		}
 	}
-	if len(keys) == 0 {
-		ctx.GetLogger().Errorf("Ducklake sink: empty inferred schema")
+	if len(dtsByKey) == 0 {
 		return nil, nil
+	}
+
+	keys := make([]string, 0, len(dtsByKey))
+	for k := range dtsByKey {
+		keys = append(keys, k)
 	}
 	sort.Strings(keys)
 
 	fields := make([]arrow.Field, len(keys))
 	dts := make([]arrow.DataType, len(keys))
 	for i, k := range keys {
-		v := row[k]
-		var dt arrow.DataType
-		switch v.(type) {
-		case string:
-			dt = arrow.BinaryTypes.String
-		case bool:
-			dt = arrow.FixedWidthTypes.Boolean
-		case float32, float64:
-			dt = arrow.PrimitiveTypes.Float64
-		case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
-			dt = arrow.PrimitiveTypes.Int64
-		case time.Time:
-			dt = arrow.FixedWidthTypes.Timestamp_ms
-		default:
-			return nil, fmt.Errorf("field <%s> has unsupported type <%T>", k, v)
-		}
+		dt := dtsByKey[k]
 		fields[i] = arrow.Field{Name: k, Type: dt, Nullable: true}
 		dts[i] = dt
 	}
@@ -571,13 +728,13 @@ func appendValueToField(b array.Builder, dt arrow.DataType, v any) error {
 	case arrow.STRING:
 		s, ok := v.(string)
 		if !ok {
-			return fmt.Errorf("type mismatch, expected string")
+			return fmt.Errorf("type mismatch, expected string, got <%T>", v)
 		}
 		b.(*array.StringBuilder).Append(s)
 	case arrow.BOOL:
 		x, ok := v.(bool)
 		if !ok {
-			return fmt.Errorf("type mismatch, expected bool")
+			return fmt.Errorf("type mismatch, expected bool, got <%T>", v)
 		}
 		b.(*array.BooleanBuilder).Append(x)
 	case arrow.FLOAT64:
@@ -587,7 +744,7 @@ func appendValueToField(b array.Builder, dt arrow.DataType, v any) error {
 		case float64:
 			b.(*array.Float64Builder).Append(x)
 		default:
-			return fmt.Errorf("type mismatch, expected float")
+			return fmt.Errorf("type mismatch, expected float, got <%T>", v)
 		}
 	case arrow.INT64:
 		x, err := toInt64(v)
@@ -598,30 +755,50 @@ func appendValueToField(b array.Builder, dt arrow.DataType, v any) error {
 	case arrow.TIMESTAMP:
 		t, ok := v.(time.Time)
 		if !ok {
-			return fmt.Errorf("type mismatch, expected timestamp")
+			return fmt.Errorf("type mismatch, expected timestamp, got <%T>", v)
 		}
 		b.(*array.TimestampBuilder).Append(arrow.Timestamp(t.UnixMilli()))
 	default:
-		return fmt.Errorf("type mismatch, unexpected arrow type")
+		return fmt.Errorf("unexpected arrow type <%s>", dt)
 	}
 	return nil
 }
 
-func appendRow(ctx api.StreamContext, rb *array.RecordBuilder, schema *inferredSchema, row map[string]any, rowNum int, allowNulls bool) error {
+// appendRow appends one row to the builder and returns the keys without a usable value,
+// so the caller can report them once per batch.
+func appendRow(rb *array.RecordBuilder, schema *inferredSchema, row map[string]any) ([]string, error) {
+	var missing []string
 	for colIdx, k := range schema.keys {
 		v, ok := row[k]
 		if !ok || v == nil {
-			if allowNulls {
-				ctx.GetLogger().Errorf("Ducklake sink: empty value Row <%d> Field <%s>", rowNum, k)
-				rb.Field(colIdx).AppendNull()
-				continue
-			}
+			missing = append(missing, k)
+			rb.Field(colIdx).AppendNull()
+			continue
 		}
 		if err := appendValueToField(rb.Field(colIdx), schema.dts[colIdx], v); err != nil {
-			return fmt.Errorf("Field <%s> Value <%s> - %s", k, v, err)
+			return nil, fmt.Errorf("Field <%s> Value <%s> - %s", k, v, err)
 		}
 	}
-	return nil
+	return missing, nil
+}
+
+// logMissingValues reports once per batch which columns had no value, at debug level:
+// missing values are expected for sparse measures, not errors.
+func logMissingValues(ctx api.StreamContext, missing []string) {
+	if len(missing) == 0 {
+		return
+	}
+	seen := make(map[string]struct{}, len(missing))
+	uniq := make([]string, 0, len(missing))
+	for _, k := range missing {
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		uniq = append(uniq, k)
+	}
+	sort.Strings(uniq)
+	ctx.GetLogger().Debugf("ducklake sink: %d empty value(s) filled with NULL for field(s) %s", len(missing), strings.Join(uniq, ", "))
 }
 
 func toInt64(v any) (int64, error) {
@@ -637,6 +814,9 @@ func toInt64(v any) (int64, error) {
 	case int64:
 		return x, nil
 	case uint:
+		if uint64(x) > math.MaxInt64 {
+			return 0, fmt.Errorf("value <%d> overflows int64", x)
+		}
 		return int64(x), nil
 	case uint8:
 		return int64(x), nil
@@ -645,9 +825,12 @@ func toInt64(v any) (int64, error) {
 	case uint32:
 		return int64(x), nil
 	case uint64:
+		if x > math.MaxInt64 {
+			return 0, fmt.Errorf("value <%d> overflows int64", x)
+		}
 		return int64(x), nil
 	default:
-		return 0, fmt.Errorf("type mismatch, expected int in got %T", v)
+		return 0, fmt.Errorf("type mismatch, expected int, got <%T>", v)
 	}
 }
 

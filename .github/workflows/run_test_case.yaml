@@ -75,7 +75,20 @@ jobs:
           sudo ./install.sh
 
       - name: Install Merge Tool
-        run: go install github.com/wadey/gocovmerge@latest
+        # gocovmerge (2016) imports golang.org/x/tools without requiring it:
+        # `go install ...@latest` would resolve the newest x/tools, which
+        # needs a Go newer than the one pinned in this job. Build it in a
+        # throwaway module with x/tools pinned instead.
+        run: |
+          set -euo pipefail
+          gcm=github.com/wadey/gocovmerge
+          gcmv=v0.0.0-20160331181800-b5bfa59ec0ad
+          workdir=$(mktemp -d)
+          cd "$workdir"
+          go mod init gocovmerge-build
+          go get "$gcm@$gcmv" golang.org/x/tools@v0.37.0
+          mkdir -p "$HOME/go/bin"
+          go build -o "$HOME/go/bin/gocovmerge" "$gcm"
 
       - name: Run test case
         run: |

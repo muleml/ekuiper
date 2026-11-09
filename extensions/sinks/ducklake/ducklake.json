@@ -43,12 +43,12 @@
       "control": "list",
       "type": "list_string",
       "hint": {
-        "en_US": "Fields written to the ducklake",
-        "zh_CN": "寫給鴨湖的田野"
+        "en_US": "Declared schema: the fields listed here, in this order, are the columns written to the table. A declared field missing from the message is written as NULL; keys not listed here are ignored with a warning. When omitted, the columns are inferred from the keys of the message. Names may contain only letters, digits and underscore.",
+        "zh_CN": "声明写入表的列：此处按顺序列出的字段即写入的列。消息中缺失的字段写入 NULL；未列出的键会被忽略并给出告警。省略时由消息的键推断列。名称只能包含字母、数字和下划线。"
       },
       "label": {
         "en_US": "Fields",
-        "zh_CN": "田野"
+        "zh_CN": "字段"
       }
     },
     {

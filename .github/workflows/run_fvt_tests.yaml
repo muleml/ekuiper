@@ -293,7 +293,8 @@ jobs:
           path: jmeter_redis.xml
 
   fvt_tests_for_container_in_helm:
-    runs-on: ubuntu-latest
+    # ubuntu-24.04: the docker step below needs apt-key (gone in 26.04)
+    runs-on: ubuntu-24.04
 
     env:
       JMETER_VERSION: 5.4.3

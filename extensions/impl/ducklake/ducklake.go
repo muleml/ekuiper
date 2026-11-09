@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -318,15 +319,48 @@ func (d *DuckLakeSink) getInsertQuery(schema *arrow.Schema, viewName string) (st
 // fieldsFromSchema returns the column names of the arrow batch schema, in order.
 // It is the only source of truth for the INSERT/SELECT column list: the schema is
 // built from the declared fields or from the batch union, so list and view cannot diverge.
+// Every name is validated as a plain identifier because it is interpolated in the INSERT
+// statement without quoting.
 func fieldsFromSchema(schema *arrow.Schema) ([]string, error) {
 	if len(schema.Fields()) == 0 {
 		return nil, fmt.Errorf("empty arrow schema")
 	}
 	fields := make([]string, 0, len(schema.Fields()))
 	for _, field := range schema.Fields() {
+		if err := validateIdentifier(field.Name); err != nil {
+			return nil, err
+		}
 		fields = append(fields, field.Name)
 	}
 	return fields, nil
+}
+
+// isPlainIdentifier reports whether s is a plain SQL identifier: letters, digits and
+// underscore, not starting with a digit. Column names are interpolated in the INSERT
+// statement, so anything else is rejected instead of quoted.
+func isPlainIdentifier(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r == '_':
+			// always allowed
+		case r >= '0' && r <= '9' && i > 0:
+			// digits are allowed only after the first character
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// validateIdentifier rejects names that cannot be interpolated safely in a query.
+func validateIdentifier(name string) error {
+	if !isPlainIdentifier(name) {
+		return fmt.Errorf("invalid field name %q: use only letters, digits and underscore, and do not start with a digit", name)
+	}
+	return nil
 }
 
 // validateFields rejects declared fields that cannot identify a column unambiguously.
@@ -340,6 +374,9 @@ func validateFields(fields []string) error {
 			return fmt.Errorf("duplicated field %q", field)
 		}
 		seen[field] = struct{}{}
+		if err := validateIdentifier(field); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -495,8 +532,9 @@ func buildArrowData(ctx api.StreamContext, row map[string]any, fields []string) 
 
 // buildArrowDataList builds the arrow record batch for a batch of rows.
 // Map-empty rows are skipped because they would only produce all-NULL rows; the
-// row number used in appendRow diagnostics always refers to the index in the
+// row number reported in the error wrapper always refers to the index in the
 // original slice, so the meaning of the "Row <n>" messages is preserved.
+// Missing values are reported once per batch instead of once per value.
 // The schema is driven by the declared fields when they are provided (declared
 // order), otherwise it is inferred from the union of the non-nil keys of the
 // usable rows.
@@ -545,11 +583,15 @@ func buildArrowDataList(ctx api.StreamContext, data []map[string]any, fields []s
 	rb := array.NewRecordBuilder(memory.DefaultAllocator, arrowInferredSchema.schema)
 	defer rb.Release()
 
+	missingFields := make([]string, 0)
 	for i, row := range rows {
-		if err := appendRow(ctx, rb, arrowInferredSchema, row, rowNums[i]); err != nil {
+		missing, err := appendRow(rb, arrowInferredSchema, row)
+		if err != nil {
 			return nil, fmt.Errorf("Ducklake sink error creating arrow data: %s - Row <%d>", err, rowNums[i])
 		}
+		missingFields = append(missingFields, missing...)
 	}
+	logMissingValues(ctx, missingFields)
 	return rb.NewRecordBatch(), nil
 }
 
@@ -686,13 +728,13 @@ func appendValueToField(b array.Builder, dt arrow.DataType, v any) error {
 	case arrow.STRING:
 		s, ok := v.(string)
 		if !ok {
-			return fmt.Errorf("type mismatch, expected string")
+			return fmt.Errorf("type mismatch, expected string, got <%T>", v)
 		}
 		b.(*array.StringBuilder).Append(s)
 	case arrow.BOOL:
 		x, ok := v.(bool)
 		if !ok {
-			return fmt.Errorf("type mismatch, expected bool")
+			return fmt.Errorf("type mismatch, expected bool, got <%T>", v)
 		}
 		b.(*array.BooleanBuilder).Append(x)
 	case arrow.FLOAT64:
@@ -702,7 +744,7 @@ func appendValueToField(b array.Builder, dt arrow.DataType, v any) error {
 		case float64:
 			b.(*array.Float64Builder).Append(x)
 		default:
-			return fmt.Errorf("type mismatch, expected float")
+			return fmt.Errorf("type mismatch, expected float, got <%T>", v)
 		}
 	case arrow.INT64:
 		x, err := toInt64(v)
@@ -713,28 +755,50 @@ func appendValueToField(b array.Builder, dt arrow.DataType, v any) error {
 	case arrow.TIMESTAMP:
 		t, ok := v.(time.Time)
 		if !ok {
-			return fmt.Errorf("type mismatch, expected timestamp")
+			return fmt.Errorf("type mismatch, expected timestamp, got <%T>", v)
 		}
 		b.(*array.TimestampBuilder).Append(arrow.Timestamp(t.UnixMilli()))
 	default:
-		return fmt.Errorf("type mismatch, unexpected arrow type")
+		return fmt.Errorf("unexpected arrow type <%s>", dt)
 	}
 	return nil
 }
 
-func appendRow(ctx api.StreamContext, rb *array.RecordBuilder, schema *inferredSchema, row map[string]any, rowNum int) error {
+// appendRow appends one row to the builder and returns the keys without a usable value,
+// so the caller can report them once per batch.
+func appendRow(rb *array.RecordBuilder, schema *inferredSchema, row map[string]any) ([]string, error) {
+	var missing []string
 	for colIdx, k := range schema.keys {
 		v, ok := row[k]
 		if !ok || v == nil {
-			ctx.GetLogger().Debugf("ducklake sink: empty value Row <%d> Field <%s>", rowNum, k)
+			missing = append(missing, k)
 			rb.Field(colIdx).AppendNull()
 			continue
 		}
 		if err := appendValueToField(rb.Field(colIdx), schema.dts[colIdx], v); err != nil {
-			return fmt.Errorf("Field <%s> Value <%s> - %s", k, v, err)
+			return nil, fmt.Errorf("Field <%s> Value <%s> - %s", k, v, err)
 		}
 	}
-	return nil
+	return missing, nil
+}
+
+// logMissingValues reports once per batch which columns had no value, at debug level:
+// missing values are expected for sparse measures, not errors.
+func logMissingValues(ctx api.StreamContext, missing []string) {
+	if len(missing) == 0 {
+		return
+	}
+	seen := make(map[string]struct{}, len(missing))
+	uniq := make([]string, 0, len(missing))
+	for _, k := range missing {
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		uniq = append(uniq, k)
+	}
+	sort.Strings(uniq)
+	ctx.GetLogger().Debugf("ducklake sink: %d empty value(s) filled with NULL for field(s) %s", len(missing), strings.Join(uniq, ", "))
 }
 
 func toInt64(v any) (int64, error) {
@@ -750,6 +814,9 @@ func toInt64(v any) (int64, error) {
 	case int64:
 		return x, nil
 	case uint:
+		if uint64(x) > math.MaxInt64 {
+			return 0, fmt.Errorf("value <%d> overflows int64", x)
+		}
 		return int64(x), nil
 	case uint8:
 		return int64(x), nil
@@ -758,9 +825,12 @@ func toInt64(v any) (int64, error) {
 	case uint32:
 		return int64(x), nil
 	case uint64:
+		if x > math.MaxInt64 {
+			return 0, fmt.Errorf("value <%d> overflows int64", x)
+		}
 		return int64(x), nil
 	default:
-		return 0, fmt.Errorf("type mismatch, expected int in got %T", v)
+		return 0, fmt.Errorf("type mismatch, expected int, got <%T>", v)
 	}
 }
 

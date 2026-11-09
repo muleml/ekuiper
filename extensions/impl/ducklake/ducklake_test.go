@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -604,6 +605,25 @@ func TestProvision_Config(t *testing.T) {
 				"fields":       []any{"a", ""},
 			},
 			errStr: "empty field",
+		},
+		{
+			name: "unsafe field name",
+			conf: map[string]any{
+				"storage": map[string]any{
+					"storage_type":     "s3",
+					"storage_endpoint": "test-endpoint:9000",
+					"storage_bucket":   "ducklake",
+					"storage_key_id":   "test_id",
+					"storage_secret":   "test_secret",
+				},
+				"catalog": map[string]any{
+					"catalog_type": "duckdb",
+				},
+				"table":        "table",
+				"ducklakeName": "the_ducklake",
+				"fields":       []any{"a;b"},
+			},
+			errStr: "invalid field name",
 		},
 	}
 	for _, tt := range tests {
@@ -2634,6 +2654,101 @@ func TestArrowSchemaFromFields(t *testing.T) {
 			require.Equal(t, tt.want.keys, fieldNames)
 		})
 	}
+}
+
+func TestFieldsFromSchema(t *testing.T) {
+	t.Run("empty schema", func(t *testing.T) {
+		fields, err := fieldsFromSchema(arrow.NewSchema(nil, nil))
+
+		require.ErrorContains(t, err, "empty arrow schema")
+		require.Nil(t, fields)
+	})
+
+	t.Run("field names in order", func(t *testing.T) {
+		schema := arrow.NewSchema([]arrow.Field{
+			{Name: "a", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+			{Name: "b", Type: arrow.BinaryTypes.String, Nullable: true},
+		}, nil)
+
+		fields, err := fieldsFromSchema(schema)
+
+		require.NoError(t, err)
+		require.Equal(t, []string{"a", "b"}, fields)
+	})
+
+	t.Run("unsafe field name", func(t *testing.T) {
+		schema := arrow.NewSchema([]arrow.Field{
+			{Name: "a;b", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+		}, nil)
+
+		fields, err := fieldsFromSchema(schema)
+
+		require.ErrorContains(t, err, "invalid field name")
+		require.Nil(t, fields)
+	})
+}
+
+func TestGetInsertQuery_RejectsUnsafeColumn(t *testing.T) {
+	s := &DuckLakeSink{conf: c{ducklakeName: "the_ducklake", sanitizedTable: "table"}}
+
+	t.Run("unsafe column from payload schema", func(t *testing.T) {
+		schema := arrow.NewSchema([]arrow.Field{
+			{Name: "a;b", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+		}, nil)
+
+		query, err := s.getInsertQuery(schema, "__ekuiper_ducklake_1")
+
+		require.ErrorContains(t, err, "invalid field name")
+		require.Empty(t, query)
+	})
+
+	t.Run("plain columns", func(t *testing.T) {
+		schema := arrow.NewSchema([]arrow.Field{
+			{Name: "a", Type: arrow.PrimitiveTypes.Int64, Nullable: true},
+			{Name: "b", Type: arrow.BinaryTypes.String, Nullable: true},
+		}, nil)
+
+		query, err := s.getInsertQuery(schema, "__ekuiper_ducklake_1")
+
+		require.NoError(t, err)
+		require.Equal(t, "INSERT INTO the_ducklake.table (a, b) SELECT a, b FROM __ekuiper_ducklake_1;", query)
+	})
+}
+
+func TestToInt64_Overflow(t *testing.T) {
+	maxInt64 := uint64(math.MaxInt64)
+
+	t.Run("uint64 at max int64", func(t *testing.T) {
+		got, err := toInt64(maxInt64)
+
+		require.NoError(t, err)
+		require.Equal(t, int64(math.MaxInt64), got)
+	})
+
+	t.Run("uint64 beyond max int64", func(t *testing.T) {
+		got, err := toInt64(maxInt64 + 1)
+
+		require.ErrorContains(t, err, "overflows int64")
+		require.Zero(t, got)
+	})
+
+	t.Run("uint beyond max int64", func(t *testing.T) {
+		if uint64(^uint(0)) < maxInt64+1 {
+			t.Skip("uint is 32 bits wide on this platform")
+		}
+
+		got, err := toInt64(uint(maxInt64) + 1)
+
+		require.ErrorContains(t, err, "overflows int64")
+		require.Zero(t, got)
+	})
+
+	t.Run("small uint64", func(t *testing.T) {
+		got, err := toInt64(uint64(7))
+
+		require.NoError(t, err)
+		require.Equal(t, int64(7), got)
+	})
 }
 
 func TestInferArrowSchemaFromRows(t *testing.T) {
